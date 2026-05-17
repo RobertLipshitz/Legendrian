@@ -43,15 +43,31 @@ Atlas naming convention
 
 Input format
 ------------
-All computations start from a braid word: a list of positive integers encoding
-the plat closure of a positive braid.  Generator i represents a positive crossing
-between strands i and i+1 (counting from the top).  All left cusps share one
-x-coordinate and all right cusps share another.
+Leg accepts three input forms.
 
-Generator numbering is 1-indexed: crossings are generators 1..len(b), right cusps
-are generators len(b)+1..len(b)+cusp_number.
+Braid word — a list of positive integers encoding the plat closure of a positive
+braid.  Generator i represents a positive crossing between strands i and i+1
+(counting from the top, 1-indexed).  All left cusps share one x-coordinate and
+all right cusps share another.
 
-Example: [2, 2, 2] is the standard Legendrian representative of the right-handed trefoil.
+    Leg([2, 2, 2])    standard Legendrian right-handed trefoil
+
+Tangle decomposition — a list of tuples describing a general front diagram as a
+left-to-right sequence of elementary moves:
+
+    ('<', h)   left cusp at height h (0-indexed from the top, current strand count)
+    ('>', h)   right cusp at height h
+    ('X', h)   positive crossing between strands h and h+1
+
+The code converts the tangle to plat form internally using Legendrian Reidemeister
+II moves, and stores the original sequence as self.tangle.
+
+    Leg([('<', 0), ('<', 0), ('X', 1), ('X', 0), ('X', 1), ('>', 0), ('>', 0)])
+
+Atlas name — a string key into the built-in ATLAS dictionary.
+
+    Leg('mK3_1')      mirror trefoil (unique representative)
+    Leg('mK5_2.0')    first of two reps of mirror 5_2 (0-indexed)
 
 Dependencies (install via pip):
     matplotlib    -- for Leg.draw()
@@ -202,9 +218,14 @@ class Leg:
 
     Construction
     ------------
-    Leg([2, 2, 2])      braid word — a list of positive integers
+    Leg([2, 2, 2])      braid word — list of positive integers (plat closure)
     Leg('mK3_1')        atlas name — unique Legendrian representative
     Leg('mK5_2.0')      first of two reps of mirror of 5_2 (0-indexed)
+    Leg([('<', 0), ('X', 0), ('>', 0)])
+                        tangle decomposition — list of (op, height) tuples where
+                        op is '<' (left cusp), '>' (right cusp), or 'X' (crossing);
+                        heights are 0-indexed from the top at the current strand count.
+                        Converted to plat form internally; stored as self.tangle.
 
     Classical invariants  (computed once, cached as properties)
     -----------------------------------------------------------
@@ -230,12 +251,22 @@ class Leg:
 
     def __init__(
         self,
-        input: Union[List[int], str],
+        input: Union[List[int], List[tuple], str],
         name: Optional[str] = None,
     ) -> None:
-        if isinstance(input, list):
-            self.braid: List[int] = list(input)
-            self.name: str = name if name is not None else repr(self.braid)
+        _is_tangle = (
+            isinstance(input, list) and bool(input) and isinstance(input[0], tuple)
+        )
+        if _is_tangle:
+            Leg._validate_tangle(input)
+            _braid, _ncusps = Leg._tangle_to_braid(input)
+            self.tangle: List[tuple] = list(input)
+            self.braid: List[int] = _braid
+            self.num_cusps: int = _ncusps
+            self.name: str = name if name is not None else repr(self.tangle)
+        elif isinstance(input, list):
+            self.braid = list(input)
+            self.name = name if name is not None else repr(self.braid)
         elif isinstance(input, str):
             m = re.match(r'^(.+)\.(\d+)$', input)
             canon, idx = (m.group(1), int(m.group(2))) if m else (input, None)
@@ -263,22 +294,166 @@ class Leg:
             self.name = name if name is not None else input
         else:
             raise TypeError(
-                f'Expected a braid word (list of int) or atlas name (str), '
-                f'got {type(input).__name__!r}'
+                f'Expected a braid word (list of int), tangle sequence (list of tuples), '
+                f'or atlas name (str), got {type(input).__name__!r}'
             )
-        self.num_cusps: int = max(self.braid) // 2 + 1
+        if not _is_tangle:
+            self.num_cusps = max(self.braid) // 2 + 1
         self._dga_cache: Dict[GroundRing, DGA] = {}
         self._rulings_cache: Dict[int, List[List[int]]] = {}
 
     def __repr__(self) -> str:
         return f'Leg({self.name!r})'
 
+    @staticmethod
+    def _validate_tangle(tangle) -> None:
+        """Raise ValueError if tangle is not a valid closed Legendrian tangle sequence."""
+        count = 0
+        for idx, item in enumerate(tangle):
+            if not (isinstance(item, tuple) and len(item) == 2):
+                raise ValueError(
+                    f'Tangle element {idx} must be a 2-tuple (op, h), got {item!r}'
+                )
+            op, h = item
+            if op not in ('<', '>', 'X'):
+                raise ValueError(
+                    f"Tangle element {idx}: op must be '<', '>', or 'X', got {op!r}"
+                )
+            if not isinstance(h, int) or h < 0:
+                raise ValueError(
+                    f'Tangle element {idx}: height must be a non-negative int, got {h!r}'
+                )
+            if op == '<':
+                if h > count:
+                    raise ValueError(
+                        f'Tangle element {idx}: LC height {h} out of range '
+                        f'({count} strands present, valid 0..{count})'
+                    )
+                count += 2
+            elif op == '>':
+                if count < 2 or h + 1 >= count:
+                    raise ValueError(
+                        f'Tangle element {idx}: RC height {h} out of range '
+                        f'({count} strands present, need at least {h + 2})'
+                    )
+                count -= 2
+            else:  # 'X'
+                if count < 2 or h + 1 >= count:
+                    raise ValueError(
+                        f'Tangle element {idx}: crossing height {h} out of range '
+                        f'({count} strands present, need at least {h + 2})'
+                    )
+        if count != 0:
+            raise ValueError(
+                f'Tangle is not closed: {count} strand(s) remain at the end'
+            )
+
+    @staticmethod
+    def _tangle_to_braid(tangle) -> Tuple[List[int], int]:
+        """
+        Convert a validated tangle sequence to (braid_word_1indexed, num_cusps).
+        Applies LR-II commutation rules until plat form, then extracts braid word.
+        """
+        seq = list(tangle)
+        num_cusps = sum(1 for op, _ in seq if op == '<')
+        max_iters = max(10000, len(seq) ** 2 * 50)
+
+        for _ in range(max_iters):
+            for i in range(len(seq) - 1):
+                op_a, h_a = seq[i]
+                op_b, h_b = seq[i + 1]
+
+                # Rule A: X(h) · LC(j) — move LC left past X
+                if op_a == 'X' and op_b == '<':
+                    h, j = h_a, h_b
+                    if h <= j - 2:
+                        seq[i], seq[i + 1] = ('<', j), ('X', h)
+                    elif h == j - 1:
+                        # LR-II: cusp rises by 1, two extra crossings in post-LC config
+                        seq[i:i + 2] = [('<', j - 1), ('X', j + 1), ('X', j), ('X', j - 1)]
+                    else:  # h >= j
+                        seq[i], seq[i + 1] = ('<', j), ('X', h + 2)
+                    break
+
+                # Rule B: RC(j) · X(h) — move RC right past X (h in post-RC config)
+                elif op_a == '>' and op_b == 'X':
+                    j, h = h_a, h_b
+                    if h < j:
+                        seq[i], seq[i + 1] = ('X', h), ('>', j)
+                    elif h == j - 1:
+                        # LR-II: RC falls by 1, two extra crossings in pre-RC config
+                        seq[i:i + 2] = [('X', j + 1), ('X', j), ('X', j - 1), ('>', j + 1)]
+                    else:  # h >= j
+                        seq[i], seq[i + 1] = ('X', h + 2), ('>', j)
+                    break
+
+                # Rule C: RC(k) · LC(j) — move LC left past RC
+                elif op_a == '>' and op_b == '<':
+                    k, j = h_a, h_b
+                    # j < k means LC is above RC (j = k-1 is an edge case, treated as j < k)
+                    if j < k:
+                        seq[i], seq[i + 1] = ('<', j), ('>', k + 2)
+                    else:
+                        seq[i], seq[i + 1] = ('<', j + 2), ('>', k)
+                    break
+
+                # LC-LC far-commutation: LC(m)·LC(n) with n > m+1 → LC(n-2)·LC(m)
+                elif op_a == '<' and op_b == '<' and h_b > h_a + 1:
+                    seq[i], seq[i + 1] = ('<', h_b - 2), ('<', h_a)
+                    break
+
+                # Rule D: LC(k) · LC(k+1) — fix nested left cusps (R2 move)
+                elif op_a == '<' and op_b == '<' and h_b == h_a + 1:
+                    k = h_a
+                    seq[i:i + 2] = [('<', k), ('<', k + 2), ('X', k + 1), ('X', k)]
+                    break
+
+                # RC-RC far-commutation: RC(n)·RC(m) with n > m+1 → RC(m)·RC(n-2)
+                elif op_a == '>' and op_b == '>' and h_a > h_b + 1:
+                    seq[i], seq[i + 1] = ('>', h_b), ('>', h_a - 2)
+                    break
+
+                # Rule F: RC(k+1) · RC(k) — fix nested right cusps (R2 move)
+                elif op_a == '>' and op_b == '>' and h_a == h_b + 1:
+                    k = h_b
+                    seq[i:i + 2] = [('X', k), ('X', k + 1), ('>', k), ('>', k)]
+                    break
+
+            else:
+                break  # no violation found: sequence is in plat form
+        else:
+            raise RuntimeError(
+                f'Tangle-to-braid conversion did not terminate after {max_iters} '
+                'iterations — the tangle may be very complex or there is a bug.'
+            )
+
+        # Verify the result is valid plat form
+        seen_x = False
+        seen_rc = False
+        for op, h in seq:
+            if op == '<':
+                if seen_x or seen_rc:
+                    raise AssertionError(f'LC after X or RC in plat-form output: {seq}')
+                if h % 2 != 0:
+                    raise AssertionError(f'LC at odd height {h} in plat-form output: {seq}')
+            elif op == 'X':
+                if seen_rc:
+                    raise AssertionError(f'X after RC in plat-form output: {seq}')
+                seen_x = True
+            elif op == '>':
+                if h % 2 != 0:
+                    raise AssertionError(f'RC at odd height {h} in plat-form output: {seq}')
+                seen_rc = True
+
+        braid = [h + 1 for op, h in seq if op == 'X']
+        return braid, num_cusps
+
     # --- Classical invariants ---
 
     @cached_property
     def num_components(self) -> int:
         b = self.braid
-        strand_num = 2 * (max(b) // 2 + 1)
+        strand_num = 2 * self.num_cusps
         parent = list(range(strand_num + 1))
 
         def find(x: int) -> int:
@@ -347,6 +522,8 @@ class Leg:
     @cached_property
     def rot(self) -> int:
         b = self.braid
+        if not b:
+            return 0
         m = max(b)
         h = m + 2 if m % 2 == 0 else m + 1
         backend = list(reversed([h - x for x in b]))
@@ -565,10 +742,101 @@ class Leg:
             result.append(s + [last - 0.5 if abs(last) % 2 == 1 else last + 0.5])
         return result
 
-    def draw(self, label_generators: bool = False):
+    def _trace_tangle(self) -> List[List[Tuple[float, float, bool]]]:
+        """
+        (x, y, cusp_tip) waypoints for each strand arc.
+        cusp_tip=True marks a left/right cusp extremum, where the tangent is
+        vertical; cusp_tip=False marks a regular waypoint with a horizontal tangent.
+        """
+        segments: List[List[Tuple[float, float, bool]]] = []
+        active: List[int] = []   # active[height] = segment index
+        x = 0.0
+        W = 2.0
+
+        for op, h in self.tangle:
+            x_L, x_R = x, x + W
+
+            if op == '<':
+                for i, seg_idx in enumerate(active):
+                    if segments[seg_idx][-1][0] < x_L:
+                        segments[seg_idx].append((x_L, -float(i), False))
+                    y_new = float(i + 2) if i >= h else float(i)
+                    segments[seg_idx].append((x_R, -y_new, False))
+                cusp_x = x_L + W * 0.5
+                seg_top = len(segments)
+                segments.append([(cusp_x, -(h + 0.5), True), (x_R, -float(h), False)])
+                seg_bot = len(segments)
+                segments.append([(cusp_x, -(h + 0.5), True), (x_R, -float(h + 1), False)])
+                active = active[:h] + [seg_top, seg_bot] + active[h:]
+
+            elif op == '>':
+                cusp_x = x_R - W * 0.5
+                for i, seg_idx in enumerate(active):
+                    if segments[seg_idx][-1][0] < x_L:
+                        segments[seg_idx].append((x_L, -float(i), False))
+                    if i in (h, h + 1):
+                        segments[seg_idx].append((cusp_x, -(h + 0.5), True))
+                    else:
+                        y_new = float(i - 2) if i > h + 1 else float(i)
+                        segments[seg_idx].append((x_R, -y_new, False))
+                active = active[:h] + active[h + 2:]
+
+            elif op == 'X':
+                for i, seg_idx in enumerate(active):
+                    if segments[seg_idx][-1][0] < x_L:
+                        segments[seg_idx].append((x_L, -float(i), False))
+                active[h], active[h + 1] = active[h + 1], active[h]
+                for i, seg_idx in enumerate(active):
+                    segments[seg_idx].append((x_R, -float(i), False))
+
+            x = x_R
+
+        return segments
+
+    def draw(self, label_generators: bool = False, use_tangle: bool = False):
         """Plot the front projection of this Leg. Returns a matplotlib Figure."""
         import matplotlib.pyplot as plt
         import numpy as np
+
+        if use_tangle:
+            if not hasattr(self, 'tangle'):
+                raise AttributeError(
+                    'This Leg has no stored tangle; '
+                    'initialize with a tangle sequence to use use_tangle=True'
+                )
+            segments = self._trace_tangle()
+            all_x = [pt[0] for seg in segments for pt in seg]
+            all_y = [pt[1] for seg in segments for pt in seg]
+            fig, ax = plt.subplots(figsize=(max(4, max(all_x) * 0.5), 3))
+            _cmap = plt.get_cmap('tab10')
+            colors = [_cmap(i) for i in range(10)]
+            t = np.linspace(0, 1, 50)
+            for k, seg in enumerate(segments):
+                px, py = [], []
+                for j in range(len(seg) - 1):
+                    x0, y0, tip0 = seg[j]
+                    x3, y3, tip3 = seg[j + 1]
+                    dx = x3 - x0
+                    # horizontal tangent at regular waypoints; zero velocity at cusp tips
+                    c1 = (x0, y0) if tip0 else (x0 + dx / 3, y0)
+                    c2 = (x3, y3) if tip3 else (x3 - dx / 3, y3)
+                    bx = ((1-t)**3 * x0 + 3*(1-t)**2*t * c1[0]
+                          + 3*(1-t)*t**2 * c2[0] + t**3 * x3)
+                    by = ((1-t)**3 * y0 + 3*(1-t)**2*t * c1[1]
+                          + 3*(1-t)*t**2 * c2[1] + t**3 * y3)
+                    if px:
+                        px.extend(bx[1:].tolist())
+                        py.extend(by[1:].tolist())
+                    else:
+                        px.extend(bx.tolist())
+                        py.extend(by.tolist())
+                ax.plot(px, py, color=colors[k % 10], linewidth=2,
+                        solid_capstyle='round', solid_joinstyle='round')
+            ax.yaxis.set_visible(False)
+            ax.xaxis.set_visible(False)
+            ax.set_title(f'Legendrian Knot  tangle = {self.tangle}')
+            plt.tight_layout()
+            return fig
 
         b = self.braid
         strands = self._trace_braid()

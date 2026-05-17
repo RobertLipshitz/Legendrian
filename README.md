@@ -40,9 +40,42 @@ print(k.format_ruling_invariant())  #ruling polynomial as polynomial
 
 ## Input Format
 
-All computations start from a **braid word**: a list of positive integers encoding the plat closure of a positive braid. The integer `i` represents the `i`-th elementary braid generator σ_i (a positive crossing between strands `i` and `i+1`, counting from the top). The resulting diagram is a Legendrian knot in the front projection where all left cusps share one x-coordinate and all right cusps share another.
+`Leg` accepts three input forms.
 
-Example: `[2, 2, 2]` is the standard Legendrian representative of the right-handed trefoil.
+**Braid word** — a list of positive integers encoding the plat closure of a positive braid. The integer `i` represents σ_i, a positive crossing between strands `i` and `i+1` (1-indexed from the top). All left cusps share one x-coordinate and all right cusps share another.
+
+```python
+Leg([2, 2, 2])      # standard Legendrian right-handed trefoil
+```
+
+**Atlas name** — a string key into the built-in `ATLAS` of pre-computed representatives.
+
+```python
+Leg('mK3_1')        # mirror trefoil (unique representative)
+Leg('mK5_2.0')      # first of two reps of mirror 5_2 (0-indexed)
+```
+
+**Tangle decomposition** — a list of tuples describing a general front diagram as a left-to-right sequence of elementary moves:
+
+| Tuple | Meaning |
+|-------|---------|
+| `('<', h)` | Left cusp at height `h` |
+| `('>', h)` | Right cusp at height `h` |
+| `('X', h)` | Positive crossing between strands `h` and `h+1` |
+
+Heights are 0-indexed from the top and refer to the strand configuration *at that moment* (the strand count changes as cusps are added or removed). The code converts the tangle to plat form internally by applying Legendrian Reidemeister II moves, so any valid front-diagram decomposition is accepted, not just plat-ordered ones.
+
+```python
+# Trefoil described as a tangle (left cusps first, then crossings, then right cusps)
+Leg([('<', 0), ('<', 0),
+     ('X', 1), ('X', 2), ('X', 0), ('X', 2), ('X', 0), ('X', 2), ('X', 1),
+     ('>', 0), ('>', 0)])
+
+# Same knot with cusps interleaved among crossings — algorithm rearranges it
+Leg([('<', 0), ('X', 0), ('X', 0), ('<', 0), ('>', 0), ('>', 0)])
+```
+
+The original tangle is stored as `self.tangle`. The `name` keyword argument works the same way as for the other input forms.
 
 ## Classes
 
@@ -53,8 +86,9 @@ A Legendrian knot or link.
 ```python
 Leg([2,2,2])        # from braid word (list of positive ints)
 Leg('mK3_1')        # unique atlas entry
-Leg('mK3_1.0')		# also works
+Leg('mK3_1.0')      # also works
 Leg('mK5_2.0')      # first of two reps, 0-indexed
+Leg([('<', 0), ('X', 0), ('>', 0)])   # from tangle decomposition
 ```
 
 **Classical invariants** (computed once, cached):
@@ -80,8 +114,11 @@ Leg('mK5_2.0')      # first of two reps, 0-indexed
 **Visualization:**
 
 ```python
-k.draw(label_generators=True)   # returns matplotlib Figure
-k.export_svg('knot.svg')        # writes SVG, returns filename
+k.draw()                         # front projection (plat form); returns matplotlib Figure
+k.draw(label_generators=True)    # same, with generator labels
+k.draw(use_tangle=True)          # draw the tangle sequence instead of the plat
+                                 # (raises AttributeError if no tangle is stored)
+k.export_svg('knot.svg')         # writes SVG of the plat diagram, returns filename
 ```
 
 ### `DGA`
@@ -244,6 +281,10 @@ python3 -m pytest test_legendrian.py
 - Python 3.8+
 - `sympy` (for Z[λ] polynomial arithmetic)
 - `matplotlib` (for `draw` and `export_svg`)
+
+## Related Projects
+
+[legendrian_links](https://github.com/RAvdek/legendrian_links) (Avdek et al.) is a Python project with overlapping goals and a similar plat-diagram approach. It focuses on augmentation enumeration, bilinearized homology, and planar diagram algebras (RSFT), and includes a web application for interactive exploration. It also supports LCH differentials over the integers.
 
 ## Acknowledgments
 

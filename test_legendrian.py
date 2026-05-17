@@ -602,3 +602,158 @@ class TestNotImplemented:
         augm = Augmentation({1: 1}, bad_dga)
         with pytest.raises(NotImplementedError):
             _ = augm.cohomology_basis
+
+
+# ---------------------------------------------------------------------------
+# Section 12: Tangle input
+# ---------------------------------------------------------------------------
+
+# Tangle for mK3_1: two LCs, then crossings 2,3,1,3,1,3,2 (1-indexed) → 0-indexed,
+# then two RCs — all in plat order, so no commutation rules fire.
+_TREFOIL_TANGLE_PLAT = (
+    [('<', 0), ('<', 0)]
+    + [('X', g - 1) for g in [2, 3, 1, 3, 1, 3, 2]]
+    + [('>', 0), ('>', 0)]
+)
+
+# Non-plat: second LC sits after two crossings; rule A must fire twice.
+# Derived by reverse-applying rule A (free case) to the plat LC(0)·LC(0)·X(2)·X(2)·...
+# Reverse: LC(0)·X(2) → X(0)·LC(0), applied twice → LC(0)·X(0)·X(0)·LC(0)·RC(0)·RC(0)
+_TANGLE_NON_PLAT = [('<', 0), ('X', 0), ('X', 0), ('<', 0), ('>', 0), ('>', 0)]
+
+
+class TestTangleInput:
+
+    # --- round-trips (no commutation rules fire) ---
+
+    def test_lc_x_rc_braid(self):
+        assert Leg([('<', 0), ('X', 0), ('>', 0)]).braid == [1]
+
+    def test_lc_x_rc_matches_braid_tb(self):
+        assert Leg([('<', 0), ('X', 0), ('>', 0)]).tb == Leg([1]).tb
+
+    def test_lc_x_rc_matches_braid_rot(self):
+        assert Leg([('<', 0), ('X', 0), ('>', 0)]).rot == Leg([1]).rot
+
+    def test_lc_x_rc_num_cusps(self):
+        assert Leg([('<', 0), ('X', 0), ('>', 0)]).num_cusps == 1
+
+    def test_lc_x_rc_tangle_stored(self):
+        t = [('<', 0), ('X', 0), ('>', 0)]
+        assert Leg(t).tangle == t
+
+    def test_unknot_empty_braid(self):
+        assert Leg([('<', 0), ('>', 0)]).braid == []
+
+    def test_unknot_num_cusps(self):
+        assert Leg([('<', 0), ('>', 0)]).num_cusps == 1
+
+    def test_trefoil_braid_matches_atlas(self):
+        assert Leg(_TREFOIL_TANGLE_PLAT).braid == Leg('mK3_1').braid
+
+    def test_trefoil_tb_matches_atlas(self):
+        assert Leg(_TREFOIL_TANGLE_PLAT).tb == Leg('mK3_1').tb
+
+    def test_trefoil_rot_matches_atlas(self):
+        assert Leg(_TREFOIL_TANGLE_PLAT).rot == Leg('mK3_1').rot
+
+    def test_trefoil_num_cusps(self):
+        assert Leg(_TREFOIL_TANGLE_PLAT).num_cusps == 2
+
+    # --- rule A LR-II: X(0)·LC(1) with h = j−1 triggers the LR-II move ---
+
+    def test_rule_a_lrII_braid(self):
+        # LC(0) X(0) LC(1) RC(0) RC(0) → LC(0) LC(0) X(2) X(1) X(0) RC(0) RC(0)
+        assert Leg([('<', 0), ('X', 0), ('<', 1), ('>', 0), ('>', 0)]).braid == [3, 2, 1]
+
+    def test_rule_a_lrII_num_cusps(self):
+        assert Leg([('<', 0), ('X', 0), ('<', 1), ('>', 0), ('>', 0)]).num_cusps == 2
+
+    def test_rule_a_lrII_tb_matches_ref(self):
+        ra = Leg([('<', 0), ('X', 0), ('<', 1), ('>', 0), ('>', 0)])
+        assert ra.tb == Leg([3, 2, 1]).tb
+
+    def test_rule_a_lrII_rot_matches_ref(self):
+        ra = Leg([('<', 0), ('X', 0), ('<', 1), ('>', 0), ('>', 0)])
+        assert ra.rot == Leg([3, 2, 1]).rot
+
+    # --- rule D: adjacent nested LC(0)·LC(1) → extra crossings introduced ---
+
+    def test_rule_d_braid(self):
+        # LC(0) LC(1) RC(0) RC(0) → LC(0) LC(2) X(1) X(0) RC(0) RC(0) → braid [2,1]
+        assert Leg([('<', 0), ('<', 1), ('>', 0), ('>', 0)]).braid == [2, 1]
+
+    def test_rule_d_num_cusps(self):
+        assert Leg([('<', 0), ('<', 1), ('>', 0), ('>', 0)]).num_cusps == 2
+
+    # --- non-plat: rule A fires twice (free commutation) ---
+
+    def test_nonplat_braid(self):
+        assert Leg(_TANGLE_NON_PLAT).braid == [3, 3]
+
+    def test_nonplat_num_cusps(self):
+        assert Leg(_TANGLE_NON_PLAT).num_cusps == 2
+
+    def test_nonplat_tb_matches_ref(self):
+        assert Leg(_TANGLE_NON_PLAT).tb == Leg([3, 3]).tb
+
+    def test_nonplat_rot_matches_ref(self):
+        assert Leg(_TANGLE_NON_PLAT).rot == Leg([3, 3]).rot
+
+    # --- DGA ---
+
+    def test_tangle_trefoil_d_squared_zero(self):
+        assert Leg(_TREFOIL_TANGLE_PLAT).dga().check_d_squared()
+
+    # --- name and repr ---
+
+    def test_name_kwarg(self):
+        assert Leg([('<', 0), ('>', 0)], name='trivial').name == 'trivial'
+
+    def test_repr_named(self):
+        assert repr(Leg([('<', 0), ('>', 0)], name='trivial')) == "Leg('trivial')"
+
+    def test_auto_name_is_repr_of_tangle(self):
+        t = [('<', 0), ('>', 0)]
+        assert Leg(t).name == repr(t)
+
+    # --- validation errors ---
+
+    def test_validate_bad_op(self):
+        with pytest.raises(ValueError):
+            Leg([('Z', 0)])
+
+    def test_validate_negative_height(self):
+        with pytest.raises(ValueError):
+            Leg([('<', -1)])
+
+    def test_validate_unclosed(self):
+        with pytest.raises(ValueError):
+            Leg([('<', 0)])
+
+    def test_validate_crossing_height_out_of_range(self):
+        with pytest.raises(ValueError):
+            Leg([('<', 0), ('X', 5), ('>', 0)])
+
+    def test_validate_rc_height_out_of_range(self):
+        with pytest.raises(ValueError):
+            Leg([('<', 0), ('>', 5)])
+
+    def test_validate_not_a_tuple(self):
+        with pytest.raises(ValueError):
+            Leg([('X',)])
+
+    # --- draw ---
+
+    def test_draw_use_tangle_returns_figure(self):
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        t = [('<', 0), ('X', 0), ('>', 0)]
+        fig = Leg(t).draw(use_tangle=True)
+        assert hasattr(fig, 'savefig')
+        plt.close(fig)
+
+    def test_draw_use_tangle_no_tangle_raises(self):
+        with pytest.raises(AttributeError):
+            Leg([1]).draw(use_tangle=True)
