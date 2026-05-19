@@ -8,7 +8,6 @@ Single:    pytest test_legendrian.py::TestClassicalInvariants::test_trefoil_tb
 """
 
 import copy
-from collections import Counter
 import pytest
 
 from legendrian import (
@@ -315,13 +314,13 @@ class TestRulings:
         assert len(Leg(TREFOIL).rulings()) == 3
 
     def test_trefoil_ruling_invariant(self):
-        assert Leg(TREFOIL).ruling_invariant == {0: 2, 2: 1}
+        assert Leg(TREFOIL).ruling_invariant() == {0: 2, 2: 1}
 
     def test_fig_eight_ruling_invariant(self):
-        assert Leg(FIG_EIGHT).ruling_invariant == {0: 1}
+        assert Leg(FIG_EIGHT).ruling_invariant() == {0: 1}
 
     def test_chekanov_pair_rulings_differ(self):
-        assert Leg(M52_A).ruling_invariant != Leg(M52_B).ruling_invariant
+        assert Leg(M52_A).ruling_invariant() != Leg(M52_B).ruling_invariant()
 
     def test_ruling_implies_augmentation(self):
         """A knot with rulings has augmentations (Fuchs-Ishkhanov)."""
@@ -333,7 +332,6 @@ class TestRulings:
     def test_rulings_are_cached(self):
         k = Leg(TREFOIL)
         assert k.rulings() is k.rulings()
-        assert k.ruling_invariant is k.ruling_invariant
 
 
 # ---------------------------------------------------------------------------
@@ -934,7 +932,7 @@ def _build_grid_cases():
     for name in sorted(_GA.keys()):
         for i, grid in enumerate(_GA[name]):
             g = Leg(grid)
-            ruling = g.ruling_invariant if g.rot == 0 else None
+            ruling = g.ruling_invariant() if g.rot == 0 else None
             rows.append((grid, g.num_components, g.tb, g.rot, ruling))
             ids.append(f"{name}.{i}")
     return rows, ids
@@ -962,4 +960,138 @@ class TestGridAtlas:
 
     @pytest.mark.parametrize("grid,nc,tb,rot,ruling", _RULING_CASES, ids=_RULING_IDS)
     def test_ruling(self, grid, nc, tb, rot, ruling):
-        assert Leg(grid).ruling_invariant == ruling
+        assert Leg(grid).ruling_invariant() == ruling
+
+
+# ---------------------------------------------------------------------------
+# Section 15: HOMFLY and Kauffman polynomial reality checks
+#
+# Rutherford (2006): for a max-tb Legendrian rep L of knot K with tb = tb(L),
+#   R2(L)(z) = coefficient of a^{-tb-1} in HOMFLY(K; a, z)
+#   R1(L)(z) = coefficient of a^{-tb-1} in Dubrovnik(K; a, z)
+# where Dubrovnik is obtained from the KnotInfo Kauffman polynomial by
+# substituting a -> -i*a, z -> i*z (then taking absolute values of
+# coefficients to reconcile z-sign conventions).
+#
+# Expected values below were extracted from KnotInfo polynomial data and
+# verified against the atlas representatives; (R2, R1) are dicts mapping
+# z-degree to coefficient.
+# ---------------------------------------------------------------------------
+
+_POLY_EXPECTED = {
+    'mK3_1': ({0: 2, 2: 1}, {0: 2, 2: 1}),
+    'K4_1': ({0: 1}, {0: 1, 2: 1}),
+    'mK5_1': ({0: 3, 2: 4, 4: 1}, {0: 3, 2: 4, 4: 1}),
+    'mK5_2.0': ({0: 1, 2: 1}, {0: 1, 2: 1}),
+    'mK5_2.1': ({0: 1, 2: 1}, {0: 1, 2: 1}),
+    'K6_1': ({0: 1}, {0: 1, 2: 3, 4: 1}),
+    'mK6_1.0': ({0: 1}, {0: 1, 2: 1}),
+    'mK6_1.1': ({0: 1}, {0: 1, 2: 1}),
+    'K6_2': ({}, {2: 1}),
+    'mK6_2': ({0: 2, 2: 1}, {0: 2, 2: 3, 4: 1}),
+    'mK7_1': ({0: 4, 2: 10, 4: 6, 6: 1}, {0: 4, 2: 10, 4: 6, 6: 1}),
+    'mK7_2.0': ({0: 1, 2: 1}, {0: 1, 2: 1}),
+    'mK7_2.1': ({0: 1, 2: 1}, {0: 1, 2: 1}),
+    'mK7_2.2': ({0: 1, 2: 1}, {0: 1, 2: 1}),
+    'mK7_2.3': ({0: 1, 2: 1}, {0: 1, 2: 1}),
+    'K7_3.0': ({0: 1, 2: 3, 4: 1}, {0: 1, 2: 3, 4: 1}),
+    'K7_3.1': ({0: 1, 2: 3, 4: 1}, {0: 1, 2: 3, 4: 1}),
+    'K7_4.0': ({2: 1}, {2: 1}),
+    'K7_4.1': ({2: 1}, {2: 1}),
+    'K7_4.2': ({2: 1}, {2: 1}),
+    'K7_4.3': ({2: 1}, {2: 1}),
+    'mK7_5.0': ({0: 2, 2: 3, 4: 1}, {0: 2, 2: 3, 4: 1}),
+    'mK7_5.1': ({0: 2, 2: 3, 4: 1}, {0: 2, 2: 3, 4: 1}),
+    'mK7_6.0': ({0: 1, 2: 1}, {0: 1, 2: 2, 4: 1}),
+    'mK7_6.1': ({0: 1, 2: 1}, {0: 1, 2: 2, 4: 1}),
+    'mK7_6.2': ({0: 1, 2: 1}, {0: 1, 2: 2, 4: 1}),
+    'mK7_7.0': ({0: 1}, {0: 1, 2: 2, 4: 1}),
+    'mK7_7.1': ({0: 1}, {0: 1, 2: 2, 4: 1}),
+    'K8_19': ({0: 5, 2: 10, 4: 6, 6: 1}, {0: 5, 2: 10, 4: 6, 6: 1}),
+    'K8_21.0': ({}, {2: 2, 4: 1}),
+    'K8_21.1': ({}, {2: 2, 4: 1}),
+    'mK8_21': ({0: 3, 2: 2}, {0: 3, 2: 3}),
+    'K9_42': ({0: 2, 2: 1}, {0: 2, 2: 6, 4: 5, 6: 1}),
+    'mK9_42': ({}, {}),
+    'K9_43': ({0: 3, 2: 4, 4: 1}, {0: 3, 2: 7, 4: 5, 6: 1}),
+    'mK9_44': ({0: 1}, {0: 1, 2: 1}),
+    'mK9_45.0': ({0: 2, 2: 2}, {0: 2, 2: 3}),
+    'mK9_45.1': ({0: 2, 2: 2}, {0: 2, 2: 3}),
+    'K9_46': ({0: 1}, {0: 1, 2: 6, 4: 5, 6: 1}),
+    'mK9_46': ({0: 2}, {0: 2}),
+    'mK9_47': ({0: 1}, {0: 1, 2: 3}),
+    'K9_48.0': ({2: 1}, {2: 1, 4: 1}),
+    'K9_48.1': ({2: 1}, {2: 1, 4: 1}),
+    'K9_48.2': ({2: 1}, {2: 1, 4: 1}),
+    'K9_48.3': ({2: 1}, {2: 1, 4: 1}),
+    'K9_49.0': ({2: 2, 4: 1}, {2: 2, 4: 1}),
+    'K9_49.1': ({2: 2, 4: 1}, {2: 2, 4: 1}),
+    'K10_124': ({0: 7, 2: 21, 4: 21, 6: 8, 8: 1}, {0: 7, 2: 21, 4: 21, 6: 8, 8: 1}),
+    'K10_128.0': ({0: 2, 2: 6, 4: 5, 6: 1}, {0: 2, 2: 6, 4: 5, 6: 1}),
+    'K10_128.1': ({0: 2, 2: 6, 4: 5, 6: 1}, {0: 2, 2: 6, 4: 5, 6: 1}),
+    'K10_132.0': ({}, {}),
+    'K10_132.1': ({}, {}),
+    'K10_136.0': ({0: 1, 2: 1}, {0: 1, 2: 3, 4: 4, 6: 1}),
+    'K10_136.1': ({0: 1, 2: 1}, {0: 1, 2: 3, 4: 4, 6: 1}),
+    'K10_136.2': ({0: 1, 2: 1}, {0: 1, 2: 3, 4: 4, 6: 1}),
+    'K10_136.3': ({0: 1, 2: 1}, {0: 1, 2: 3, 4: 4, 6: 1}),
+    'K10_139': ({0: 6, 2: 21, 4: 21, 6: 8, 8: 1}, {0: 6, 2: 21, 4: 21, 6: 8, 8: 1}),
+    'mK10_140.0': ({0: 1}, {0: 1}),
+    'mK10_140.1': ({0: 1}, {0: 1}),
+    'K10_142.0': ({0: 1, 2: 6, 4: 5, 6: 1}, {0: 1, 2: 6, 4: 5, 6: 1}),
+    'K10_142.1': ({0: 1, 2: 6, 4: 5, 6: 1}, {0: 1, 2: 6, 4: 5, 6: 1}),
+    'mK10_145': ({0: 2, 2: 4, 4: 1}, {0: 2, 2: 4, 4: 1}),
+    'K10_160.0': ({0: 1, 2: 3, 4: 1}, {0: 1, 2: 4, 4: 4, 6: 1}),
+    'K10_160.1': ({0: 1, 2: 3, 4: 1}, {0: 1, 2: 4, 4: 4, 6: 1}),
+    'mK10_161': ({0: 3, 2: 9, 4: 6, 6: 1}, {0: 3, 2: 9, 4: 6, 6: 1}),
+    'K3_1': ({}, {1: 1}),
+    'K5_1': ({}, {1: 1}),
+    'K5_2': ({}, {1: 2, 3: 1}),
+    'K6_3': ({}, {1: 1, 3: 1}),
+    'K7_1': ({}, {1: 1}),
+    'K7_2': ({}, {1: 3, 3: 4, 5: 1}),
+    'K7_5': ({}, {1: 1, 3: 1}),
+    'K7_6': ({}, {1: 1, 3: 1}),
+    'K7_7': ({}, {3: 1}),
+    'K8_20': ({}, {1: 3, 3: 4, 5: 1}),
+    'K9_44': ({}, {3: 3, 5: 1, 1: 1}),
+    'K9_45': ({}, {1: 2, 3: 3, 5: 1}),
+    'K9_47': ({}, {3: 2, 5: 1}),
+    'K10_140': ({}, {1: 4, 3: 10, 5: 6, 7: 1}),
+    'K10_145': ({}, {1: 5, 3: 10, 5: 6, 7: 1}),
+    'K10_161': ({}, {1: 3, 3: 4, 5: 1}),
+    'mK7_3': ({}, {1: 2, 3: 1}),
+    'mK7_4': ({}, {1: 4, 3: 4, 5: 1}),
+    'mK8_19': ({}, {}),
+    'mK8_20': ({}, {1: 1}),
+    'mK9_43': ({}, {1: 1}),
+    'mK9_48': ({}, {1: 4, 3: 3}),
+    'mK9_49': ({}, {1: 4, 3: 3}),
+    'mK10_124': ({}, {}),
+    'mK10_128': ({}, {}),
+    'mK10_132': ({}, {}),
+    'mK10_136': ({}, {}),
+    'mK10_139': ({}, {1: 2, 3: 1}),
+    'mK10_142': ({}, {1: 2}),
+    'mK10_160': ({}, {1: 2}),
+}
+
+_POLY_CASES = [(rep, r2, r1) for rep, (r2, r1) in _POLY_EXPECTED.items()]
+_POLY_IDS = list(_POLY_EXPECTED.keys())
+
+
+class TestPolynomialRealityCheck:
+    """
+    Verify ruling polynomials against HOMFLY and Kauffman polynomial data
+    (Rutherford 2006).
+    """
+
+    @pytest.mark.parametrize('rep,expected_r2,expected_r1', _POLY_CASES, ids=_POLY_IDS)
+    def test_r2_ruling_polynomial(self, rep, expected_r2, expected_r1):
+        k = Leg(rep)
+        assert k.ruling_invariant(grading_mod=2) == expected_r2
+
+    @pytest.mark.parametrize('rep,expected_r2,expected_r1', _POLY_CASES, ids=_POLY_IDS)
+    def test_r1_ruling_polynomial(self, rep, expected_r2, expected_r1):
+        k = Leg(rep)
+        assert k.ruling_invariant(grading_mod=1) == expected_r1

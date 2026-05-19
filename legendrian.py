@@ -220,6 +220,37 @@ def _rank_f2(mat) -> int:
     return len(pivots)
 
 
+def _rref_zn(mat, n):
+    """Row-reduce mat over Z/n (n prime). Returns (rref_matrix, pivot_column_indices)."""
+    m = [[x % n for x in row] for row in mat]
+    rows = len(m)
+    if not rows or not m[0]:
+        return m, []
+    cols = len(m[0])
+    pivot_cols, pivot_row = [], 0
+    for col in range(cols):
+        found = next((r for r in range(pivot_row, rows) if m[r][col] % n), -1)
+        if found == -1:
+            continue
+        m[pivot_row], m[found] = m[found], m[pivot_row]
+        inv = pow(m[pivot_row][col], -1, n)
+        m[pivot_row] = [(x * inv) % n for x in m[pivot_row]]
+        for r in range(rows):
+            if r != pivot_row and m[r][col] % n:
+                factor = m[r][col]
+                m[r] = [(m[r][j] - factor * m[pivot_row][j]) % n for j in range(cols)]
+        pivot_cols.append(col)
+        pivot_row += 1
+    return m, pivot_cols
+
+
+def _rank_zn(mat, n) -> int:
+    if not mat or not mat[0]:
+        return 0
+    _, pivots = _rref_zn(mat, n)
+    return len(pivots)
+
+
 # ============================================================
 # Section 3: Leg
 # ============================================================
@@ -256,7 +287,7 @@ class Leg:
     grading            List[int]
     tb                 int   (Thurston-Bennequin number)
     rot                int   (rotation number)
-    ruling_invariant   Dict[int, int]  (Z-graded ruling polynomial in z)
+    ruling_invariant(grading_mod=0)  Dict[int, int]  (ruling polynomial in z)
 
     DGA and augmentations
     ---------------------
@@ -687,11 +718,10 @@ class Leg:
         backend = list(reversed([h - x for x in b]))
         return abs((self._trugrad(b, 1) + self._trugrad(backend, len(b))) // 2)
 
-    @cached_property
-    def ruling_invariant(self) -> Dict[int, int]:
+    def ruling_invariant(self, grading_mod: int = 0) -> Dict[int, int]:
         "Ruling polynomial as a dictionary with keys the degree and values the coefficient"
         c = self.num_cusps
-        return dict(Counter(len(r) - c + 1 for r in self.rulings()))
+        return dict(Counter(len(r) - c + 1 for r in self.rulings(grading_mod=grading_mod)))
 
     # --- DGA access ---
 
@@ -850,9 +880,9 @@ class Leg:
             self._rulings_cache[grading_mod] = result
         return self._rulings_cache[grading_mod]
 
-    def format_ruling_invariant(self) -> str:
+    def format_ruling_invariant(self, grading_mod: int = 0) -> str:
         """Format self.ruling_invariant as a polynomial string in z."""
-        d = self.ruling_invariant
+        d = self.ruling_invariant(grading_mod)
         if not d:
             return "0"
         terms = []
@@ -1521,7 +1551,7 @@ class DGA:
             else:
                 raw = aug_zn(d, grading_mod, modulus)
             self._augmentations_cache[grading_mod] = [
-                Augmentation(a, self) for a in raw
+                Augmentation(a, self, grading_mod) for a in raw
             ]
         return self._augmentations_cache[grading_mod]
 
@@ -1585,33 +1615,8 @@ class DGA:
         n = self.ring.modulus
         gs = self._gens_spaces
 
-        def rref_zn(mat):
-            m = [[x % n for x in row] for row in mat]
-            rows = len(m)
-            if not rows or not m[0]:
-                return m, []
-            cols = len(m[0])
-            pivot_cols, pivot_row = [], 0
-            for col in range(cols):
-                found = next((r for r in range(pivot_row, rows) if m[r][col] % n), -1)
-                if found == -1:
-                    continue
-                m[pivot_row], m[found] = m[found], m[pivot_row]
-                inv = pow(m[pivot_row][col], -1, n)
-                m[pivot_row] = [(x * inv) % n for x in m[pivot_row]]
-                for r in range(rows):
-                    if r != pivot_row and m[r][col] % n:
-                        factor = m[r][col]
-                        m[r] = [(m[r][j] - factor * m[pivot_row][j]) % n for j in range(cols)]
-                pivot_cols.append(col)
-                pivot_row += 1
-            return m, pivot_cols
-
         def rank_zn(mat):
-            if not mat or not mat[0]:
-                return 0
-            _, pivots = rref_zn(mat)
-            return len(pivots)
+            return _rank_zn(mat, n)
 
         def nullity_zn(mat):
             if not mat or not mat[0]:
@@ -1654,6 +1659,85 @@ class DGA:
         else:
             return self._dim_homology_zn(place, augmentation)
 
+    def _lin_hom_as_dict(self, augm: 'Augmentation', grading_mod: int) -> Dict[int, int]:
+        """
+        Poincaré-Chekanov polynomial for a single augmentation at grading_mod.
+
+        For grading_mod=0 uses the integer-graded chain complex (differential is
+        strictly degree -1 in ℤ, so adjacent-grade matrices are exact).
+        For grading_mod≥1 builds merged ℤ/n spaces and includes every ld_ε
+        contribution between the merged classes, which is required when skip-in-ℤ
+        terms still land in the correct ℤ/n grade.
+        """
+        gr = self.leg.grading
+
+        if grading_mod == 0:
+            gs = self._gens_spaces
+            max_g = max(gr)
+            result: Dict[int, int] = {}
+            for k in range(1, len(gs) + 1):
+                dim = self.dim_homology(k, augm)
+                if dim:
+                    result[max_g - k + 1] = dim
+            return result
+
+        n = grading_mod
+        # Group 1-indexed generators by grade mod n.
+        from collections import defaultdict
+        spaces: Dict[int, List[int]] = defaultdict(list)
+        for i, g in enumerate(gr):
+            spaces[g % n].append(i + 1)
+
+        if self.ring == GroundRing.Z2:
+            ld = self.lin_diff(augm)
+            ld_out = {i + 1: set(x for m in poly for x in m)
+                      for i, poly in enumerate(ld)}
+
+            def diff_mat_f2(gfrom: int, gto: int) -> List[List[int]]:
+                domain = spaces[gfrom % n]
+                rng = spaces[gto % n]
+                return [[1 if rg in ld_out.get(dg, set()) else 0
+                         for dg in domain] for rg in rng]
+
+            result = {}
+            for j in list(spaces):
+                mat_out = diff_mat_f2(j, (j - 1) % n)
+                mat_in  = diff_mat_f2((j + 1) % n, j)
+                dim = (len(spaces[j]) - _rank_f2(mat_out) - _rank_f2(mat_in))
+                if dim:
+                    result[j] = dim
+            return result
+
+        else:
+            zn_d = self.differential
+            augm_dict = augm.data
+            p = self.ring.modulus
+
+            def diff_mat_zp(gfrom: int, gto: int) -> List[List[int]]:
+                domain = spaces[gfrom % n]
+                rng = spaces[gto % n]
+                rng_idx = {g: i for i, g in enumerate(rng)}
+                mat = [[0] * len(domain) for _ in range(len(rng))]
+                for col, gen_d in enumerate(domain):
+                    for word, coeff in zn_d[gen_d - 1]:
+                        for pos, a in enumerate(word):
+                            if a in rng_idx:
+                                prod = coeff
+                                for li, b_gen in enumerate(word):
+                                    if li != pos:
+                                        prod = (prod * augm_dict.get(b_gen, 0)) % p
+                                mat[rng_idx[a]][col] = (mat[rng_idx[a]][col] + prod) % p
+                return mat
+
+            result = {}
+            for j in list(spaces):
+                mat_out = diff_mat_zp(j, (j - 1) % n)
+                mat_in  = diff_mat_zp((j + 1) % n, j)
+                dim = (len(spaces[j]) - _rank_zn(mat_out, p) - _rank_zn(mat_in, p))
+                if dim:
+                    result[j] = dim
+            return result
+
     def all_lin_hom(self, grading_mod: int = 0, format: bool = False):
         """
         Set of distinct Poincaré-Chekanov polynomials over all augmentations.
@@ -1664,15 +1748,9 @@ class DGA:
             raise NotImplementedError('all_lin_hom not implemented over Z[λ]')
         if grading_mod not in self._lin_hom_cache:
             augms = self.augmentations(grading_mod=grading_mod)
-            gs = self._gens_spaces
-            max_g = max(self.leg.grading)
             seen, results = set(), []
             for augm_obj in augms:
-                poly = {}
-                for k in range(1, len(gs) + 1):
-                    dim = self.dim_homology(k, augm_obj)
-                    if dim:
-                        poly[max_g - k + 1] = dim
+                poly = self._lin_hom_as_dict(augm_obj, grading_mod)
                 key = frozenset(poly.items())
                 if key not in seen:
                     seen.add(key)
@@ -1773,12 +1851,13 @@ class Augmentation:
     double_products                  (Z/2 only) cup-product table
     """
 
-    def __init__(self, data, dga: DGA) -> None:
+    def __init__(self, data, dga: DGA, grading_mod: int = 0) -> None:
         self.data = data
         self.dga = dga
+        self.grading_mod = grading_mod
 
     def __repr__(self) -> str:
-        return f'Augmentation({self.data!r}, ring={self.dga.ring!r})'
+        return f'Augmentation({self.data!r}, ring={self.dga.ring!r}, grading_mod={self.grading_mod!r})'
 
     @cached_property
     def lin_hom(self) -> Dict[int, int]:
@@ -1789,14 +1868,7 @@ class Augmentation:
         ring = self.dga.ring
         if ring == GroundRing.ZLAMBDA:
             raise NotImplementedError('lin_hom not implemented over Z[λ]')
-        gs = self.dga._gens_spaces
-        max_g = max(self.dga.leg.grading)
-        result = {}
-        for k in range(1, len(gs) + 1):
-            dim = self.dga.dim_homology(k, self)
-            if dim:
-                result[max_g - k + 1] = dim
-        return result
+        return self.dga._lin_hom_as_dict(self, self.grading_mod)
 
     def format_poincare(self) -> str:
         """Format self.lin_hom as a Poincaré polynomial string in t."""

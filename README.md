@@ -35,8 +35,9 @@ d2.print_differential()
 d2.check_d_squared()
 
 # Rulings
-print(k.ruling_invariant)   # ruling polynomial as {exponent: coefficient}
-print(k.format_ruling_invariant())  #ruling polynomial as polynomial
+print(k.ruling_invariant())             # Z-graded ruling polynomial as {degree: coeff}
+print(k.ruling_invariant(grading_mod=2))  # Z/2-graded ruling polynomial
+print(k.format_ruling_invariant())      # ruling polynomial as a string in z
 ```
 
 ## Input Format
@@ -115,7 +116,7 @@ Leg(([1, 0], [0, 1]))                 # from grid diagram (2-tuple of permutatio
 | `grading` | `List[int]` | Maslov grading of generators |
 | `tb` | `int` | Thurston-Bennequin number |
 | `rot` | `int` | Rotation number |
-| `ruling_invariant` | `Dict[int, int]` | Ruling polynomial coefficients |
+| `ruling_invariant(grading_mod=0)` | `Dict[int, int]` | Ruling polynomial coefficients |
 
 **DGA and augmentations:**
 
@@ -125,7 +126,7 @@ Leg(([1, 0], [0, 1]))                 # from grid diagram (2-tuple of permutatio
 | `augmentations(grading_mod, modulus)` | `List[Augmentation]` | Shorthand for `dga(Z/modulus).augmentations(grading_mod)` |
 | `all_lin_hom(grading_mod, modulus, format)` | `List[Dict[int,int]]` or `List[str]` | Distinct Poincaré-Chekanov polynomials; `format=True` returns strings |
 | `rulings(grading_mod)` | `List[List[int]]` | All graded rulings; cached per `grading_mod` |
-| `format_ruling_invariant()` | `str` | `ruling_invariant` as a polynomial string in z |
+| `format_ruling_invariant(grading_mod=0)` | `str` | `ruling_invariant` as a polynomial string in z |
 
 **Visualization:**
 
@@ -264,7 +265,7 @@ d = k.dga()
 print(d.aug_count())
 
 print(k.rulings())
-print(k.ruling_invariant)
+print(k.ruling_invariant())
 ```
 
 ### Z[λ] differential
