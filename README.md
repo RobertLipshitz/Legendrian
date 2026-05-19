@@ -11,6 +11,8 @@ The algorithms originate in a Mathematica notebook by Paul Melvin, extended by K
 | `legendrian.py` | Primary API |
 | `test_legendrian.py` | Test suite (654 tests) |
 | `auxiliary_data/grid_atlas.py` | XO grid-diagram representatives from the [Ng Legendrian atlas](https://sites.math.duke.edu/~ng/atlas/) |
+| `auxiliary_data/petkova_atlas.py` | Loader for the [Petkova et al. atlas](https://github.com/ipetkova/LegendrianAtlas) CSV data |
+| `auxiliary_data/layer{1,2,3}.csv` | Downloaded CSV files from the Petkova atlas |
 
 ## Quick Start
 
@@ -216,6 +218,31 @@ ATLAS['mK5_2']       # list of two braid words
 Prefix `m` = mirror, `K` = knot, `L` = link. Legendrian index is 0-based; omit when there is only one representative.
 
 Data sourced from the [Legendrian knot atlas](https://sites.math.duke.edu/~ng/atlas/).
+
+## Petkova Atlas
+
+`auxiliary_data/petkova_atlas.py` provides a read-only loader for the separate [Petkova et al. atlas](https://github.com/ipetkova/LegendrianAtlas), which covers 466 knot types with 2696 Legendrian representatives. It is kept separate because it uses different conventions and is less established in the literature.
+
+```python
+from auxiliary_data.petkova_atlas import layer1, layer1_by_knot, to_leg_grid
+from legendrian import Leg
+
+# Iterate all maximal-tb representatives
+for entry in layer1():
+    x, o = to_leg_grid(entry)          # converts row-indexing convention
+    leg = Leg((list(x), list(o)))
+    assert leg.tb == entry.tb          # always holds
+    assert abs(leg.rot) == abs(entry.r)
+
+# Look up by knot name (HT notation)
+reps = layer1_by_knot()['8a1']        # list of Layer1Entry for 8a1
+```
+
+**Knot naming:** uses Hoste-Thistlethwaite notation (`8a1`, `m10n3`, `11n38`) rather than the Rolfsen-style `K8_19` names used in `ATLAS`.
+
+**Convention note:** the CSV files index grid rows from the top (row 0 = top); `to_leg_grid` converts to the bottom-indexed convention expected by `Leg`. The sign of the rotation number may differ by a global orientation choice.
+
+**Layers:** Layer 1 contains full grid data. Layers 2 and 3 contain stabilised representatives (only tb, r, and parent IDs — no grid diagrams).
 
 ## Constructions
 
