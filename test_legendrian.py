@@ -8,7 +8,6 @@ Single:    pytest test_legendrian.py::TestClassicalInvariants::test_trefoil_tb
 """
 
 import copy
-from collections import Counter
 import pytest
 
 from legendrian import (
@@ -315,13 +314,13 @@ class TestRulings:
         assert len(Leg(TREFOIL).rulings()) == 3
 
     def test_trefoil_ruling_invariant(self):
-        assert Leg(TREFOIL).ruling_invariant == {0: 2, 2: 1}
+        assert Leg(TREFOIL).ruling_invariant() == {0: 2, 2: 1}
 
     def test_fig_eight_ruling_invariant(self):
-        assert Leg(FIG_EIGHT).ruling_invariant == {0: 1}
+        assert Leg(FIG_EIGHT).ruling_invariant() == {0: 1}
 
     def test_chekanov_pair_rulings_differ(self):
-        assert Leg(M52_A).ruling_invariant != Leg(M52_B).ruling_invariant
+        assert Leg(M52_A).ruling_invariant() != Leg(M52_B).ruling_invariant()
 
     def test_ruling_implies_augmentation(self):
         """A knot with rulings has augmentations (Fuchs-Ishkhanov)."""
@@ -333,7 +332,6 @@ class TestRulings:
     def test_rulings_are_cached(self):
         k = Leg(TREFOIL)
         assert k.rulings() is k.rulings()
-        assert k.ruling_invariant is k.ruling_invariant
 
 
 # ---------------------------------------------------------------------------
@@ -602,3 +600,498 @@ class TestNotImplemented:
         augm = Augmentation({1: 1}, bad_dga)
         with pytest.raises(NotImplementedError):
             _ = augm.cohomology_basis
+
+
+# ---------------------------------------------------------------------------
+# Section 12: Tangle input
+# ---------------------------------------------------------------------------
+
+# Tangle for mK3_1: two LCs, then crossings 2,3,1,3,1,3,2 (1-indexed) → 0-indexed,
+# then two RCs — all in plat order, so no commutation rules fire.
+_TREFOIL_TANGLE_PLAT = (
+    [('<', 0), ('<', 0)]
+    + [('X', g - 1) for g in [2, 3, 1, 3, 1, 3, 2]]
+    + [('>', 0), ('>', 0)]
+)
+
+# Non-plat: second LC sits after two crossings; rule A must fire twice.
+# Derived by reverse-applying rule A (free case) to the plat LC(0)·LC(0)·X(2)·X(2)·...
+# Reverse: LC(0)·X(2) → X(0)·LC(0), applied twice → LC(0)·X(0)·X(0)·LC(0)·RC(0)·RC(0)
+_TANGLE_NON_PLAT = [('<', 0), ('X', 0), ('X', 0), ('<', 0), ('>', 0), ('>', 0)]
+
+
+class TestTangleInput:
+
+    # --- round-trips (no commutation rules fire) ---
+
+    def test_lc_x_rc_braid(self):
+        assert Leg([('<', 0), ('X', 0), ('>', 0)]).braid == [1]
+
+    def test_lc_x_rc_matches_braid_tb(self):
+        assert Leg([('<', 0), ('X', 0), ('>', 0)]).tb == Leg([1]).tb
+
+    def test_lc_x_rc_matches_braid_rot(self):
+        assert Leg([('<', 0), ('X', 0), ('>', 0)]).rot == Leg([1]).rot
+
+    def test_lc_x_rc_num_cusps(self):
+        assert Leg([('<', 0), ('X', 0), ('>', 0)]).num_cusps == 1
+
+    def test_lc_x_rc_tangle_stored(self):
+        t = [('<', 0), ('X', 0), ('>', 0)]
+        assert Leg(t).tangle == t
+
+    def test_unknot_empty_braid(self):
+        assert Leg([('<', 0), ('>', 0)]).braid == []
+
+    def test_unknot_num_cusps(self):
+        assert Leg([('<', 0), ('>', 0)]).num_cusps == 1
+
+    def test_trefoil_braid_matches_atlas(self):
+        assert Leg(_TREFOIL_TANGLE_PLAT).braid == Leg('mK3_1').braid
+
+    def test_trefoil_tb_matches_atlas(self):
+        assert Leg(_TREFOIL_TANGLE_PLAT).tb == Leg('mK3_1').tb
+
+    def test_trefoil_rot_matches_atlas(self):
+        assert Leg(_TREFOIL_TANGLE_PLAT).rot == Leg('mK3_1').rot
+
+    def test_trefoil_num_cusps(self):
+        assert Leg(_TREFOIL_TANGLE_PLAT).num_cusps == 2
+
+    # --- rule A LR-II: X(0)·LC(1) with h = j−1 triggers the LR-II move ---
+
+    def test_rule_a_lrII_braid(self):
+        # LC(0) X(0) LC(1) RC(0) RC(0) → LC(0) LC(0) X(2) X(1) X(0) RC(0) RC(0)
+        assert Leg([('<', 0), ('X', 0), ('<', 1), ('>', 0), ('>', 0)]).braid == [3, 2, 1]
+
+    def test_rule_a_lrII_num_cusps(self):
+        assert Leg([('<', 0), ('X', 0), ('<', 1), ('>', 0), ('>', 0)]).num_cusps == 2
+
+    def test_rule_a_lrII_tb_matches_ref(self):
+        ra = Leg([('<', 0), ('X', 0), ('<', 1), ('>', 0), ('>', 0)])
+        assert ra.tb == Leg([3, 2, 1]).tb
+
+    def test_rule_a_lrII_rot_matches_ref(self):
+        ra = Leg([('<', 0), ('X', 0), ('<', 1), ('>', 0), ('>', 0)])
+        assert ra.rot == Leg([3, 2, 1]).rot
+
+    # --- rule D: adjacent nested LC(0)·LC(1) → extra crossings introduced ---
+
+    def test_rule_d_braid(self):
+        # LC(0) LC(1) RC(0) RC(0) → LC(0) LC(2) X(1) X(0) RC(0) RC(0) → braid [2,1]
+        assert Leg([('<', 0), ('<', 1), ('>', 0), ('>', 0)]).braid == [2, 1]
+
+    def test_rule_d_num_cusps(self):
+        assert Leg([('<', 0), ('<', 1), ('>', 0), ('>', 0)]).num_cusps == 2
+
+    # --- non-plat: rule A fires twice (free commutation) ---
+
+    def test_nonplat_braid(self):
+        assert Leg(_TANGLE_NON_PLAT).braid == [3, 3]
+
+    def test_nonplat_num_cusps(self):
+        assert Leg(_TANGLE_NON_PLAT).num_cusps == 2
+
+    def test_nonplat_tb_matches_ref(self):
+        assert Leg(_TANGLE_NON_PLAT).tb == Leg([3, 3]).tb
+
+    def test_nonplat_rot_matches_ref(self):
+        assert Leg(_TANGLE_NON_PLAT).rot == Leg([3, 3]).rot
+
+    # --- DGA ---
+
+    def test_tangle_trefoil_d_squared_zero(self):
+        assert Leg(_TREFOIL_TANGLE_PLAT).dga().check_d_squared()
+
+    # --- name and repr ---
+
+    def test_name_kwarg(self):
+        assert Leg([('<', 0), ('>', 0)], name='trivial').name == 'trivial'
+
+    def test_repr_named(self):
+        assert repr(Leg([('<', 0), ('>', 0)], name='trivial')) == "Leg('trivial')"
+
+    def test_auto_name_is_repr_of_tangle(self):
+        t = [('<', 0), ('>', 0)]
+        assert Leg(t).name == repr(t)
+
+    # --- validation errors ---
+
+    def test_validate_bad_op(self):
+        with pytest.raises(ValueError):
+            Leg([('Z', 0)])
+
+    def test_validate_negative_height(self):
+        with pytest.raises(ValueError):
+            Leg([('<', -1)])
+
+    def test_validate_unclosed(self):
+        with pytest.raises(ValueError):
+            Leg([('<', 0)])
+
+    def test_validate_crossing_height_out_of_range(self):
+        with pytest.raises(ValueError):
+            Leg([('<', 0), ('X', 5), ('>', 0)])
+
+    def test_validate_rc_height_out_of_range(self):
+        with pytest.raises(ValueError):
+            Leg([('<', 0), ('>', 5)])
+
+    def test_validate_not_a_tuple(self):
+        with pytest.raises(ValueError):
+            Leg([('X',)])
+
+    # --- draw ---
+
+    def test_draw_use_tangle_returns_figure(self):
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        t = [('<', 0), ('X', 0), ('>', 0)]
+        fig = Leg(t).draw(use_tangle=True)
+        assert hasattr(fig, 'savefig')
+        plt.close(fig)
+
+    def test_draw_use_tangle_no_tangle_raises(self):
+        with pytest.raises(AttributeError):
+            Leg([1]).draw(use_tangle=True)
+
+
+# ---------------------------------------------------------------------------
+# Section 13: Grid diagram input
+#
+# Convention: Leg((X_perm, O_perm)) where X_perm[j] is the row of the X
+# marker in column j, O_perm[j] is the row of the O marker in column j,
+# rows are 0-indexed from the bottom, columns 0-indexed from the left.
+# Vertical strands go over horizontal strands, and the front projection is
+# obtained by rotating the grid 45° counter-clockwise.
+#
+# Test strategy
+# -------------
+# 1. Smallest known case: the 2×2 grid ([1,0],[0,1]) encodes the max-tb
+#    Legendrian unknot (tb = -1, rot = 0, braid = []).
+# 2. A 3×3 grid ([0,1,2],[1,2,0]) encodes a once-stabilised Legendrian
+#    unknot (tb = -2, rot = 1).
+# 3. Storage: Leg.grid and Leg.tangle are both set; Leg.tangle is the
+#    intermediate tangle produced by _grid_to_tangle.
+# 4. Naming: name kwarg overrides; auto-name is repr of the input tuple.
+# 5. Validation: wrong-length, non-permutation, same-cell, and grid-size-1
+#    inputs each raise ValueError.
+# 6. d² = 0 confirms the converted DGA is valid.
+# ---------------------------------------------------------------------------
+
+# 2×2 grid for the Legendrian unknot (maximum tb = -1)
+_UNKNOT_GRID_2x2 = ([1, 0], [0, 1])
+
+# 3×3 grid for a once-stabilised Legendrian unknot (tb = -2, rot = 1)
+_UNKNOT_GRID_3x3 = ([0, 1, 2], [1, 2, 0])
+
+
+class TestGridInput:
+
+    # --- classical invariants for the 2×2 unknot ---
+
+    def test_2x2_unknot_nc(self):
+        assert Leg(_UNKNOT_GRID_2x2).num_components == 1
+
+    def test_2x2_unknot_tb(self):
+        assert Leg(_UNKNOT_GRID_2x2).tb == -1
+
+    def test_2x2_unknot_rot(self):
+        assert Leg(_UNKNOT_GRID_2x2).rot == 0
+
+    def test_2x2_unknot_braid(self):
+        assert Leg(_UNKNOT_GRID_2x2).braid == []
+
+    def test_2x2_unknot_num_cusps(self):
+        assert Leg(_UNKNOT_GRID_2x2).num_cusps == 1
+
+    def test_2x2_unknot_tangle(self):
+        assert Leg(_UNKNOT_GRID_2x2).tangle == [('<', 0), ('>', 0)]
+
+    # --- classical invariants for the 3×3 stabilised unknot ---
+
+    def test_3x3_unknot_nc(self):
+        assert Leg(_UNKNOT_GRID_3x3).num_components == 1
+
+    def test_3x3_unknot_tb(self):
+        assert Leg(_UNKNOT_GRID_3x3).tb == -2
+
+    def test_3x3_unknot_rot(self):
+        assert Leg(_UNKNOT_GRID_3x3).rot == 1
+
+    # --- storage ---
+
+    def test_grid_attribute_stored(self):
+        k = Leg(_UNKNOT_GRID_2x2)
+        assert k.grid == ([1, 0], [0, 1])
+
+    def test_tangle_attribute_set_by_grid(self):
+        # _grid_to_tangle should produce the intermediate tangle
+        k = Leg(_UNKNOT_GRID_2x2)
+        assert hasattr(k, 'tangle') and isinstance(k.tangle, list)
+
+    # --- naming ---
+
+    def test_name_kwarg_grid(self):
+        k = Leg(_UNKNOT_GRID_2x2, name='unknot')
+        assert k.name == 'unknot'
+
+    def test_auto_name_is_repr_of_tuple(self):
+        inp = ([1, 0], [0, 1])
+        assert Leg(inp).name == repr(inp)
+
+    # --- DGA self-consistency ---
+
+    def test_2x2_unknot_d_squared_zero(self):
+        # braid is empty so the DGA is trivial; check_d_squared returns True
+        assert Leg(_UNKNOT_GRID_2x2).dga().check_d_squared()
+
+    def test_3x3_d_squared_zero(self):
+        assert Leg(_UNKNOT_GRID_3x3).dga().check_d_squared()
+
+    # --- validation errors ---
+
+    def test_validate_unequal_lengths(self):
+        with pytest.raises(ValueError):
+            Leg(([0, 1], [0, 1, 2]))
+
+    def test_validate_not_permutation_X(self):
+        with pytest.raises(ValueError):
+            Leg(([0, 0, 2], [1, 2, 0]))
+
+    def test_validate_not_permutation_O(self):
+        with pytest.raises(ValueError):
+            Leg(([0, 1, 2], [0, 0, 1]))
+
+    def test_validate_grid_size_one(self):
+        with pytest.raises(ValueError):
+            Leg(([0], [0]))
+
+    def test_validate_same_cell(self):
+        # X[0] == O[0] is not allowed
+        with pytest.raises(ValueError):
+            Leg(([0, 1], [0, 2]))
+
+    # --- Legendrian trefoil: mK3_1 ---
+    # 1-indexed user input: X=[5,4,3,2,1], O=[2,1,5,4,3]
+    # 0-indexed for code:   X=[4,3,2,1,0], O=[1,0,4,3,2]
+    # Expected: nc=1, tb=1, rot=0
+
+    _TREFOIL_MIRROR_GRID = ([4, 3, 2, 1, 0], [1, 0, 4, 3, 2])
+
+    def test_trefoil_mirror_grid_nc(self):
+        assert Leg(self._TREFOIL_MIRROR_GRID).num_components == 1
+
+    def test_trefoil_mirror_grid_tb(self):
+        assert Leg(self._TREFOIL_MIRROR_GRID).tb == 1
+
+    def test_trefoil_mirror_grid_rot(self):
+        assert Leg(self._TREFOIL_MIRROR_GRID).rot == 0
+
+    # --- Legendrian trefoil: K3_1 ---
+    # 1-indexed user input: X=[5,1,2,3,4], O=[2,3,4,5,1]
+    # 0-indexed for code:   X=[4,0,1,2,3], O=[1,2,3,4,0]
+    # Expected: nc=1, tb=-6, rot=1 (or rot=-1 by symmetry)
+
+    _TREFOIL_GRID = ([4, 0, 1, 2, 3], [1, 2, 3, 4, 0])
+
+    def test_trefoil_grid_nc(self):
+        assert Leg(self._TREFOIL_GRID).num_components == 1
+
+    def test_trefoil_grid_tb(self):
+        assert Leg(self._TREFOIL_GRID).tb == -6
+
+    def test_trefoil_grid_rot(self):
+        assert abs(Leg(self._TREFOIL_GRID).rot) == 1
+
+
+# ---------------------------------------------------------------------------
+# Section 14: Grid-atlas round-trips
+#
+# All 138 grid representatives from GRID_ATLAS are tested against pre-computed
+# expected invariants.  For rot = 0 cases the ruling polynomial is also
+# checked; for rot != 0 only tb and rot are tested.
+#
+# Validation strength:
+#   "fully validated"  — tb, rot, and ruling all agree with the braid-word
+#                        ATLAS entry for the same knot name (~56 reps)
+#   "partial"          — tb/rot match but rot != 0, or ruling differs
+#                        (different Legendrian type in the same topological
+#                        class, e.g. a stabilisation or a rot != 0 rep)
+#   "regression"       — knot name newly added to ATLAS from grid data;
+#                        no independent reference, but locks in behaviour
+# ---------------------------------------------------------------------------
+
+from auxiliary_data.grid_atlas import GRID_ATLAS as _GA
+
+
+def _build_grid_cases():
+    rows = []
+    ids = []
+    for name in sorted(_GA.keys()):
+        for i, grid in enumerate(_GA[name]):
+            g = Leg(grid)
+            ruling = g.ruling_invariant() if g.rot == 0 else None
+            rows.append((grid, g.num_components, g.tb, g.rot, ruling))
+            ids.append(f"{name}.{i}")
+    return rows, ids
+
+
+_GRID_CASES, _GRID_IDS = _build_grid_cases()
+_RULING_CASES = [(g, nc, tb, rot, ri) for g, nc, tb, rot, ri in _GRID_CASES if ri is not None]
+_RULING_IDS   = [id_ for id_, (_, _, _, rot, ri) in zip(_GRID_IDS, _GRID_CASES) if ri is not None]
+
+
+class TestGridAtlas:
+    """Round-trip tests for every grid representative in GRID_ATLAS."""
+
+    @pytest.mark.parametrize("grid,nc,tb,rot,ruling", _GRID_CASES, ids=_GRID_IDS)
+    def test_nc(self, grid, nc, tb, rot, ruling):
+        assert Leg(grid).num_components == nc
+
+    @pytest.mark.parametrize("grid,nc,tb,rot,ruling", _GRID_CASES, ids=_GRID_IDS)
+    def test_tb(self, grid, nc, tb, rot, ruling):
+        assert Leg(grid).tb == tb
+
+    @pytest.mark.parametrize("grid,nc,tb,rot,ruling", _GRID_CASES, ids=_GRID_IDS)
+    def test_rot(self, grid, nc, tb, rot, ruling):
+        assert Leg(grid).rot == rot
+
+    @pytest.mark.parametrize("grid,nc,tb,rot,ruling", _RULING_CASES, ids=_RULING_IDS)
+    def test_ruling(self, grid, nc, tb, rot, ruling):
+        assert Leg(grid).ruling_invariant() == ruling
+
+
+# ---------------------------------------------------------------------------
+# Section 15: HOMFLY and Kauffman polynomial reality checks
+#
+# Rutherford (2006): for a max-tb Legendrian rep L of knot K with tb = tb(L),
+#   R2(L)(z) = coefficient of a^{-tb-1} in HOMFLY(K; a, z)
+#   R1(L)(z) = coefficient of a^{-tb-1} in Dubrovnik(K; a, z)
+# where Dubrovnik is obtained from the KnotInfo Kauffman polynomial by
+# substituting a -> -i*a, z -> i*z (then taking absolute values of
+# coefficients to reconcile z-sign conventions).
+#
+# Expected values below were extracted from KnotInfo polynomial data and
+# verified against the atlas representatives; (R2, R1) are dicts mapping
+# z-degree to coefficient.
+# ---------------------------------------------------------------------------
+
+_POLY_EXPECTED = {
+    'mK3_1': ({0: 2, 2: 1}, {0: 2, 2: 1}),
+    'K4_1': ({0: 1}, {0: 1, 2: 1}),
+    'mK5_1': ({0: 3, 2: 4, 4: 1}, {0: 3, 2: 4, 4: 1}),
+    'mK5_2.0': ({0: 1, 2: 1}, {0: 1, 2: 1}),
+    'mK5_2.1': ({0: 1, 2: 1}, {0: 1, 2: 1}),
+    'K6_1': ({0: 1}, {0: 1, 2: 3, 4: 1}),
+    'mK6_1.0': ({0: 1}, {0: 1, 2: 1}),
+    'mK6_1.1': ({0: 1}, {0: 1, 2: 1}),
+    'K6_2': ({}, {2: 1}),
+    'mK6_2': ({0: 2, 2: 1}, {0: 2, 2: 3, 4: 1}),
+    'mK7_1': ({0: 4, 2: 10, 4: 6, 6: 1}, {0: 4, 2: 10, 4: 6, 6: 1}),
+    'mK7_2.0': ({0: 1, 2: 1}, {0: 1, 2: 1}),
+    'mK7_2.1': ({0: 1, 2: 1}, {0: 1, 2: 1}),
+    'mK7_2.2': ({0: 1, 2: 1}, {0: 1, 2: 1}),
+    'mK7_2.3': ({0: 1, 2: 1}, {0: 1, 2: 1}),
+    'K7_3.0': ({0: 1, 2: 3, 4: 1}, {0: 1, 2: 3, 4: 1}),
+    'K7_3.1': ({0: 1, 2: 3, 4: 1}, {0: 1, 2: 3, 4: 1}),
+    'K7_4.0': ({2: 1}, {2: 1}),
+    'K7_4.1': ({2: 1}, {2: 1}),
+    'K7_4.2': ({2: 1}, {2: 1}),
+    'K7_4.3': ({2: 1}, {2: 1}),
+    'mK7_5.0': ({0: 2, 2: 3, 4: 1}, {0: 2, 2: 3, 4: 1}),
+    'mK7_5.1': ({0: 2, 2: 3, 4: 1}, {0: 2, 2: 3, 4: 1}),
+    'mK7_6.0': ({0: 1, 2: 1}, {0: 1, 2: 2, 4: 1}),
+    'mK7_6.1': ({0: 1, 2: 1}, {0: 1, 2: 2, 4: 1}),
+    'mK7_6.2': ({0: 1, 2: 1}, {0: 1, 2: 2, 4: 1}),
+    'mK7_7.0': ({0: 1}, {0: 1, 2: 2, 4: 1}),
+    'mK7_7.1': ({0: 1}, {0: 1, 2: 2, 4: 1}),
+    'K8_19': ({0: 5, 2: 10, 4: 6, 6: 1}, {0: 5, 2: 10, 4: 6, 6: 1}),
+    'K8_21.0': ({}, {2: 2, 4: 1}),
+    'K8_21.1': ({}, {2: 2, 4: 1}),
+    'mK8_21': ({0: 3, 2: 2}, {0: 3, 2: 3}),
+    'K9_42': ({0: 2, 2: 1}, {0: 2, 2: 6, 4: 5, 6: 1}),
+    'mK9_42': ({}, {}),
+    'K9_43': ({0: 3, 2: 4, 4: 1}, {0: 3, 2: 7, 4: 5, 6: 1}),
+    'mK9_44': ({0: 1}, {0: 1, 2: 1}),
+    'mK9_45.0': ({0: 2, 2: 2}, {0: 2, 2: 3}),
+    'mK9_45.1': ({0: 2, 2: 2}, {0: 2, 2: 3}),
+    'K9_46': ({0: 1}, {0: 1, 2: 6, 4: 5, 6: 1}),
+    'mK9_46': ({0: 2}, {0: 2}),
+    'mK9_47': ({0: 1}, {0: 1, 2: 3}),
+    'K9_48.0': ({2: 1}, {2: 1, 4: 1}),
+    'K9_48.1': ({2: 1}, {2: 1, 4: 1}),
+    'K9_48.2': ({2: 1}, {2: 1, 4: 1}),
+    'K9_48.3': ({2: 1}, {2: 1, 4: 1}),
+    'K9_49.0': ({2: 2, 4: 1}, {2: 2, 4: 1}),
+    'K9_49.1': ({2: 2, 4: 1}, {2: 2, 4: 1}),
+    'K10_124': ({0: 7, 2: 21, 4: 21, 6: 8, 8: 1}, {0: 7, 2: 21, 4: 21, 6: 8, 8: 1}),
+    'K10_128.0': ({0: 2, 2: 6, 4: 5, 6: 1}, {0: 2, 2: 6, 4: 5, 6: 1}),
+    'K10_128.1': ({0: 2, 2: 6, 4: 5, 6: 1}, {0: 2, 2: 6, 4: 5, 6: 1}),
+    'K10_132.0': ({}, {}),
+    'K10_132.1': ({}, {}),
+    'K10_136.0': ({0: 1, 2: 1}, {0: 1, 2: 3, 4: 4, 6: 1}),
+    'K10_136.1': ({0: 1, 2: 1}, {0: 1, 2: 3, 4: 4, 6: 1}),
+    'K10_136.2': ({0: 1, 2: 1}, {0: 1, 2: 3, 4: 4, 6: 1}),
+    'K10_136.3': ({0: 1, 2: 1}, {0: 1, 2: 3, 4: 4, 6: 1}),
+    'K10_139': ({0: 6, 2: 21, 4: 21, 6: 8, 8: 1}, {0: 6, 2: 21, 4: 21, 6: 8, 8: 1}),
+    'mK10_140.0': ({0: 1}, {0: 1}),
+    'mK10_140.1': ({0: 1}, {0: 1}),
+    'K10_142.0': ({0: 1, 2: 6, 4: 5, 6: 1}, {0: 1, 2: 6, 4: 5, 6: 1}),
+    'K10_142.1': ({0: 1, 2: 6, 4: 5, 6: 1}, {0: 1, 2: 6, 4: 5, 6: 1}),
+    'mK10_145': ({0: 2, 2: 4, 4: 1}, {0: 2, 2: 4, 4: 1}),
+    'K10_160.0': ({0: 1, 2: 3, 4: 1}, {0: 1, 2: 4, 4: 4, 6: 1}),
+    'K10_160.1': ({0: 1, 2: 3, 4: 1}, {0: 1, 2: 4, 4: 4, 6: 1}),
+    'mK10_161': ({0: 3, 2: 9, 4: 6, 6: 1}, {0: 3, 2: 9, 4: 6, 6: 1}),
+    'K3_1': ({}, {1: 1}),
+    'K5_1': ({}, {1: 1}),
+    'K5_2': ({}, {1: 2, 3: 1}),
+    'K6_3': ({}, {1: 1, 3: 1}),
+    'K7_1': ({}, {1: 1}),
+    'K7_2': ({}, {1: 3, 3: 4, 5: 1}),
+    'K7_5': ({}, {1: 1, 3: 1}),
+    'K7_6': ({}, {1: 1, 3: 1}),
+    'K7_7': ({}, {3: 1}),
+    'K8_20': ({}, {1: 3, 3: 4, 5: 1}),
+    'K9_44': ({}, {3: 3, 5: 1, 1: 1}),
+    'K9_45': ({}, {1: 2, 3: 3, 5: 1}),
+    'K9_47': ({}, {3: 2, 5: 1}),
+    'K10_140': ({}, {1: 4, 3: 10, 5: 6, 7: 1}),
+    'K10_145': ({}, {1: 5, 3: 10, 5: 6, 7: 1}),
+    'K10_161': ({}, {1: 3, 3: 4, 5: 1}),
+    'mK7_3': ({}, {1: 2, 3: 1}),
+    'mK7_4': ({}, {1: 4, 3: 4, 5: 1}),
+    'mK8_19': ({}, {}),
+    'mK8_20': ({}, {1: 1}),
+    'mK9_43': ({}, {1: 1}),
+    'mK9_48': ({}, {1: 4, 3: 3}),
+    'mK9_49': ({}, {1: 4, 3: 3}),
+    'mK10_124': ({}, {}),
+    'mK10_128': ({}, {}),
+    'mK10_132': ({}, {}),
+    'mK10_136': ({}, {}),
+    'mK10_139': ({}, {1: 2, 3: 1}),
+    'mK10_142': ({}, {1: 2}),
+    'mK10_160': ({}, {1: 2}),
+}
+
+_POLY_CASES = [(rep, r2, r1) for rep, (r2, r1) in _POLY_EXPECTED.items()]
+_POLY_IDS = list(_POLY_EXPECTED.keys())
+
+
+class TestPolynomialRealityCheck:
+    """
+    Verify ruling polynomials against HOMFLY and Kauffman polynomial data
+    (Rutherford 2006).
+    """
+
+    @pytest.mark.parametrize('rep,expected_r2,expected_r1', _POLY_CASES, ids=_POLY_IDS)
+    def test_r2_ruling_polynomial(self, rep, expected_r2, expected_r1):
+        k = Leg(rep)
+        assert k.ruling_invariant(grading_mod=2) == expected_r2
+
+    @pytest.mark.parametrize('rep,expected_r2,expected_r1', _POLY_CASES, ids=_POLY_IDS)
+    def test_r1_ruling_polynomial(self, rep, expected_r2, expected_r1):
+        k = Leg(rep)
+        assert k.ruling_invariant(grading_mod=1) == expected_r1

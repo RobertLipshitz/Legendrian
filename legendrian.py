@@ -43,15 +43,43 @@ Atlas naming convention
 
 Input format
 ------------
-All computations start from a braid word: a list of positive integers encoding
-the plat closure of a positive braid.  Generator i represents a positive crossing
-between strands i and i+1 (counting from the top).  All left cusps share one
-x-coordinate and all right cusps share another.
+Leg accepts four input forms.
 
-Generator numbering is 1-indexed: crossings are generators 1..len(b), right cusps
-are generators len(b)+1..len(b)+cusp_number.
+Braid word — a list of positive integers encoding the plat closure of a positive
+braid.  Generator i represents a positive crossing between strands i and i+1
+(counting from the top, 1-indexed).  All left cusps share one x-coordinate and
+all right cusps share another.
 
-Example: [2, 2, 2] is the standard Legendrian representative of the right-handed trefoil.
+    Leg([2, 2, 2])    standard Legendrian right-handed trefoil
+
+Tangle decomposition — a list of tuples describing a general front diagram as a
+left-to-right sequence of elementary moves:
+
+    ('<', h)   left cusp at height h (0-indexed from the top, current strand count)
+    ('>', h)   right cusp at height h
+    ('X', h)   positive crossing between strands h and h+1
+
+The code converts the tangle to plat form internally using Legendrian Reidemeister
+II moves, and stores the original sequence as self.tangle.
+
+    Leg([('<', 0), ('<', 0), ('X', 1), ('X', 0), ('X', 1), ('>', 0), ('>', 0)])
+
+Grid diagram — a pair of permutations (X_perm, O_perm) passed as a 2-tuple of
+lists.  X_perm[j] is the row of the X marker in column j; O_perm[j] is the row
+of the O marker in column j.  Rows are 0-indexed from the bottom; columns are
+0-indexed from the left.  Vertical strands pass over horizontal strands.  The
+Legendrian front projection is obtained by rotating the grid 45° counter-
+clockwise, which maps horizontal segments to slope +1 and vertical segments to
+slope -1.  The algorithm detects left cusps, right cusps, crossings, and kinks
+(transitions between horizontal and vertical strands), produces a tangle
+sequence, and converts it to plat form via Legendrian Reidemeister moves.
+
+    Leg(([1, 0], [0, 1]))   2×2 grid for the Legendrian unknot (tb = -1)
+
+Atlas name — a string key into the built-in ATLAS dictionary.
+
+    Leg('mK3_1')      mirror trefoil (unique representative)
+    Leg('mK5_2.0')    first of two reps of mirror 5_2 (0-indexed)
 
 Dependencies (install via pip):
     matplotlib    -- for Leg.draw()
@@ -78,7 +106,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import re
 from collections import Counter
@@ -192,6 +220,37 @@ def _rank_f2(mat) -> int:
     return len(pivots)
 
 
+def _rref_zn(mat, n):
+    """Row-reduce mat over Z/n (n prime). Returns (rref_matrix, pivot_column_indices)."""
+    m = [[x % n for x in row] for row in mat]
+    rows = len(m)
+    if not rows or not m[0]:
+        return m, []
+    cols = len(m[0])
+    pivot_cols, pivot_row = [], 0
+    for col in range(cols):
+        found = next((r for r in range(pivot_row, rows) if m[r][col] % n), -1)
+        if found == -1:
+            continue
+        m[pivot_row], m[found] = m[found], m[pivot_row]
+        inv = pow(m[pivot_row][col], -1, n)
+        m[pivot_row] = [(x * inv) % n for x in m[pivot_row]]
+        for r in range(rows):
+            if r != pivot_row and m[r][col] % n:
+                factor = m[r][col]
+                m[r] = [(m[r][j] - factor * m[pivot_row][j]) % n for j in range(cols)]
+        pivot_cols.append(col)
+        pivot_row += 1
+    return m, pivot_cols
+
+
+def _rank_zn(mat, n) -> int:
+    if not mat or not mat[0]:
+        return 0
+    _, pivots = _rref_zn(mat, n)
+    return len(pivots)
+
+
 # ============================================================
 # Section 3: Leg
 # ============================================================
@@ -202,9 +261,25 @@ class Leg:
 
     Construction
     ------------
-    Leg([2, 2, 2])      braid word — a list of positive integers
+    Leg([2, 2, 2])      braid word — list of positive integers (plat closure)
     Leg('mK3_1')        atlas name — unique Legendrian representative
     Leg('mK5_2.0')      first of two reps of mirror of 5_2 (0-indexed)
+    Leg([('<', 0), ('X', 0), ('>', 0)])
+                        tangle decomposition — list of (op, height) tuples where
+                        op is '<' (left cusp), '>' (right cusp), or 'X' (crossing);
+                        heights are 0-indexed from the top at the current strand count.
+                        Converted to plat form internally; stored as self.tangle.
+    Leg((X_perm, O_perm))
+                        grid diagram — a pair of permutations (as lists of ints).
+                        X_perm[j] is the row of the X marker in column j,
+                        O_perm[j] is the row of the O marker in column j,
+                        with rows 0-indexed from the bottom and columns
+                        0-indexed from the left.  Vertical strands go over
+                        horizontal strands.  The Legendrian front is obtained
+                        by rotating the grid 45° counter-clockwise; the result
+                        is converted to a tangle and then to plat form.
+                        Stored as self.grid; the intermediate tangle is stored
+                        as self.tangle.
 
     Classical invariants  (computed once, cached as properties)
     -----------------------------------------------------------
@@ -212,7 +287,7 @@ class Leg:
     grading            List[int]
     tb                 int   (Thurston-Bennequin number)
     rot                int   (rotation number)
-    ruling_invariant   Dict[int, int]  (Z-graded ruling polynomial in z)
+    ruling_invariant(grading_mod=0)  Dict[int, int]  (ruling polynomial in z)
 
     DGA and augmentations
     ---------------------
@@ -230,12 +305,39 @@ class Leg:
 
     def __init__(
         self,
-        input: Union[List[int], str],
+        input: Union[List[int], List[tuple], str, tuple],
         name: Optional[str] = None,
     ) -> None:
-        if isinstance(input, list):
-            self.braid: List[int] = list(input)
-            self.name: str = name if name is not None else repr(self.braid)
+        _is_grid = (
+            isinstance(input, tuple) and len(input) == 2
+            and isinstance(input[0], (list, tuple))
+            and isinstance(input[1], (list, tuple))
+        )
+        _is_tangle = (
+            not _is_grid
+            and isinstance(input, list) and bool(input) and isinstance(input[0], tuple)
+        )
+        if _is_grid:
+            X_perm, O_perm = list(input[0]), list(input[1])
+            Leg._validate_grid(X_perm, O_perm)
+            _tangle = Leg._grid_to_tangle(X_perm, O_perm)
+            Leg._validate_tangle(_tangle)
+            _braid, _ncusps = Leg._tangle_to_braid(_tangle)
+            self.grid: Tuple[List[int], List[int]] = (X_perm, O_perm)
+            self.tangle: List[tuple] = _tangle
+            self.braid: List[int] = _braid
+            self.num_cusps: int = _ncusps
+            self.name: str = name if name is not None else repr(input)
+        elif _is_tangle:
+            Leg._validate_tangle(input)
+            _braid, _ncusps = Leg._tangle_to_braid(input)
+            self.tangle: List[tuple] = list(input)
+            self.braid: List[int] = _braid
+            self.num_cusps: int = _ncusps
+            self.name: str = name if name is not None else repr(self.tangle)
+        elif isinstance(input, list):
+            self.braid = list(input)
+            self.name = name if name is not None else repr(self.braid)
         elif isinstance(input, str):
             m = re.match(r'^(.+)\.(\d+)$', input)
             canon, idx = (m.group(1), int(m.group(2))) if m else (input, None)
@@ -263,22 +365,284 @@ class Leg:
             self.name = name if name is not None else input
         else:
             raise TypeError(
-                f'Expected a braid word (list of int) or atlas name (str), '
+                f'Expected a braid word (list of int), tangle sequence (list of tuples), '
+                f'atlas name (str), or grid diagram (tuple of two lists), '
                 f'got {type(input).__name__!r}'
             )
-        self.num_cusps: int = max(self.braid) // 2 + 1
+        if not _is_tangle and not _is_grid:
+            self.num_cusps = max(self.braid) // 2 + 1
         self._dga_cache: Dict[GroundRing, DGA] = {}
         self._rulings_cache: Dict[int, List[List[int]]] = {}
 
     def __repr__(self) -> str:
         return f'Leg({self.name!r})'
 
+    @staticmethod
+    def _validate_grid(X_perm, O_perm) -> None:
+        """Raise ValueError if the grid diagram is invalid."""
+        n = len(X_perm)
+        if len(O_perm) != n:
+            raise ValueError('X and O permutations must have the same length')
+        if n < 2:
+            raise ValueError(f'Grid size must be at least 2, got {n}')
+        if sorted(X_perm) != list(range(n)) or sorted(O_perm) != list(range(n)):
+            raise ValueError('X and O must each be a permutation of {0, …, n-1}')
+        if any(X_perm[j] == O_perm[j] for j in range(n)):
+            raise ValueError('X and O markers cannot occupy the same cell')
+
+    @staticmethod
+    def _grid_to_tangle(X_perm, O_perm) -> List[tuple]:
+        """
+        Convert a grid diagram (two permutations, row 0 at bottom) to a tangle sequence.
+
+        X_perm[j] = row of the X marker in column j.
+        O_perm[j] = row of the O marker in column j.
+
+        After a 45° CCW rotation, the diagram becomes a Legendrian front whose events
+        are read left-to-right by new_x = col − row.  Horizontal grid segments become
+        slope +1 strands; vertical segments become slope −1 strands.  Each marker is
+        either a left cusp, a right cusp, or a kink (slope change with no new_x extremum).
+        Each interior cell whose row lies strictly between the two markers in its column
+        and whose column lies within its row's horizontal span is a crossing.
+        """
+        n = len(X_perm)
+
+        # Inverse permutations: x_col[r] / o_col[r] = column of X/O in row r
+        x_col = [0] * n
+        o_col = [0] * n
+        for j in range(n):
+            x_col[X_perm[j]] = j
+            o_col[O_perm[j]] = j
+
+        # Collect all events as (new_x, new_z, type, col j, row r)
+        # new_x = j - r, new_z = j + r
+        events: List[tuple] = []
+
+        for j in range(n):
+            for r, is_x in [(X_perm[j], True), (O_perm[j], False)]:
+                other_col = o_col[r] if is_x else x_col[r]
+                other_row = O_perm[j] if is_x else X_perm[j]
+                nx, nz = j - r, j + r
+
+                if other_col > j and other_row < r:
+                    events.append((nx, nz, 'LC', j, r))
+                elif other_col < j and other_row > r:
+                    events.append((nx, nz, 'RC', j, r))
+                elif other_col > j:  # other_row > r: V_j → H_r (V ends, H starts)
+                    events.append((nx, nz, 'KVH', j, r))
+                else:               # other_col < j, other_row < r: H_r → V_j
+                    events.append((nx, nz, 'KHV', j, r))
+
+        # Crossings: cell (j, r) where vertical in col j spans row r strictly,
+        # horizontal in row r spans col j, and (j, r) is not a marker.
+        for j in range(n):
+            lo, hi = min(X_perm[j], O_perm[j]), max(X_perm[j], O_perm[j])
+            for r in range(lo + 1, hi):
+                L_r = min(x_col[r], o_col[r])
+                R_r = max(x_col[r], o_col[r])
+                if L_r <= j <= R_r:
+                    events.append((j - r, j + r, 'X', j, r))
+
+        # Process top-to-bottom within each new_x value (descending new_z)
+        events.sort(key=lambda e: (e[0], -e[1]))
+
+        # Active strands: mutable [intercept, slope, label]
+        # Horizontal in row r : slope=+1, intercept=2r  → new_z = new_x + 2r
+        # Vertical   in col j : slope=−1, intercept=2j  → new_z = −new_x + 2j
+        active: List[List] = []
+
+        def nz_of(strand, nx):
+            return strand[1] * nx + strand[0]
+
+        def height_above(nx, nz_ref):
+            return sum(1 for s in active if nz_of(s, nx) > nz_ref)
+
+        def find(label):
+            for s in active:
+                if s[2] == label:
+                    return s
+            raise AssertionError(f'strand {label} missing from active set')
+
+        tangle: List[tuple] = []
+
+        for nx, nz, etype, j, r in events:
+            if etype == 'LC':
+                h = height_above(nx, nz)
+                tangle.append(('<', h))
+                # horizontal (above, slope+1) then vertical (below, slope−1)
+                active.append([2 * r, +1, ('H', r)])
+                active.append([2 * j, -1, ('V', j)])
+
+            elif etype == 'RC':
+                h = height_above(nx, nz)
+                tangle.append(('>', h))
+                active.remove(find(('H', r)))
+                active.remove(find(('V', j)))
+
+            elif etype == 'KVH':   # vertical in col j → horizontal in row r
+                s = find(('V', j))
+                s[0], s[1], s[2] = 2 * r, +1, ('H', r)
+
+            elif etype == 'KHV':   # horizontal in row r → vertical in col j
+                s = find(('H', r))
+                s[0], s[1], s[2] = 2 * j, -1, ('V', j)
+
+            else:   # crossing
+                h = height_above(nx, nz)
+                tangle.append(('X', h))
+
+        return tangle
+
+    @staticmethod
+    def _validate_tangle(tangle) -> None:
+        """Raise ValueError if tangle is not a valid closed Legendrian tangle sequence."""
+        count = 0
+        for idx, item in enumerate(tangle):
+            if not (isinstance(item, tuple) and len(item) == 2):
+                raise ValueError(
+                    f'Tangle element {idx} must be a 2-tuple (op, h), got {item!r}'
+                )
+            op, h = item
+            if op not in ('<', '>', 'X'):
+                raise ValueError(
+                    f"Tangle element {idx}: op must be '<', '>', or 'X', got {op!r}"
+                )
+            if not isinstance(h, int) or h < 0:
+                raise ValueError(
+                    f'Tangle element {idx}: height must be a non-negative int, got {h!r}'
+                )
+            if op == '<':
+                if h > count:
+                    raise ValueError(
+                        f'Tangle element {idx}: LC height {h} out of range '
+                        f'({count} strands present, valid 0..{count})'
+                    )
+                count += 2
+            elif op == '>':
+                if count < 2 or h + 1 >= count:
+                    raise ValueError(
+                        f'Tangle element {idx}: RC height {h} out of range '
+                        f'({count} strands present, need at least {h + 2})'
+                    )
+                count -= 2
+            else:  # 'X'
+                if count < 2 or h + 1 >= count:
+                    raise ValueError(
+                        f'Tangle element {idx}: crossing height {h} out of range '
+                        f'({count} strands present, need at least {h + 2})'
+                    )
+        if count != 0:
+            raise ValueError(
+                f'Tangle is not closed: {count} strand(s) remain at the end'
+            )
+
+    @staticmethod
+    def _tangle_to_braid(tangle) -> Tuple[List[int], int]:
+        """
+        Convert a validated tangle sequence to (braid_word_1indexed, num_cusps).
+        Applies LR-II commutation rules until plat form, then extracts braid word.
+        """
+        seq = list(tangle)
+        num_cusps = sum(1 for op, _ in seq if op == '<')
+        max_iters = max(10000, len(seq) ** 2 * 50)
+
+        for _ in range(max_iters):
+            for i in range(len(seq) - 1):
+                op_a, h_a = seq[i]
+                op_b, h_b = seq[i + 1]
+
+                # Rule A: X(h) · LC(j) — move LC left past X
+                if op_a == 'X' and op_b == '<':
+                    h, j = h_a, h_b
+                    if h <= j - 2:
+                        seq[i], seq[i + 1] = ('<', j), ('X', h)
+                    elif h == j - 1:
+                        # LR-II: cusp rises by 1, two extra crossings in post-LC config
+                        seq[i:i + 2] = [('<', j - 1), ('X', j + 1), ('X', j), ('X', j - 1)]
+                    else:  # h >= j
+                        seq[i], seq[i + 1] = ('<', j), ('X', h + 2)
+                    break
+
+                # Rule B: RC(j) · X(h) — move RC right past X (h in post-RC config)
+                elif op_a == '>' and op_b == 'X':
+                    j, h = h_a, h_b
+                    if h == j - 1:
+                        # LR-II: h+1 == j is a removed position, so strands are
+                        # non-adjacent in pre-RC config; RC falls by 1
+                        seq[i:i + 2] = [('X', j + 1), ('X', j), ('X', j - 1), ('>', j + 1)]
+                    elif h < j:
+                        seq[i], seq[i + 1] = ('X', h), ('>', j)
+                    else:  # h >= j
+                        seq[i], seq[i + 1] = ('X', h + 2), ('>', j)
+                    break
+
+                # Rule C: RC(k) · LC(j) — move LC left past RC
+                elif op_a == '>' and op_b == '<':
+                    k, j = h_a, h_b
+                    # j < k means LC is above RC (j = k-1 is an edge case, treated as j < k)
+                    if j < k:
+                        seq[i], seq[i + 1] = ('<', j), ('>', k + 2)
+                    else:
+                        seq[i], seq[i + 1] = ('<', j + 2), ('>', k)
+                    break
+
+                # LC-LC far-commutation: LC(m)·LC(n) with n > m+1 → LC(n-2)·LC(m)
+                elif op_a == '<' and op_b == '<' and h_b > h_a + 1:
+                    seq[i], seq[i + 1] = ('<', h_b - 2), ('<', h_a)
+                    break
+
+                # Rule D: LC(k) · LC(k+1) — fix nested left cusps (R2 move)
+                elif op_a == '<' and op_b == '<' and h_b == h_a + 1:
+                    k = h_a
+                    seq[i:i + 2] = [('<', k), ('<', k + 2), ('X', k + 1), ('X', k)]
+                    break
+
+                # RC-RC far-commutation: RC(n)·RC(m) with n > m+1 → RC(m)·RC(n-2)
+                elif op_a == '>' and op_b == '>' and h_a > h_b + 1:
+                    seq[i], seq[i + 1] = ('>', h_b), ('>', h_a - 2)
+                    break
+
+                # Rule F: RC(k+1) · RC(k) — fix nested right cusps (R2 move)
+                elif op_a == '>' and op_b == '>' and h_a == h_b + 1:
+                    k = h_b
+                    seq[i:i + 2] = [('X', k), ('X', k + 1), ('>', k), ('>', k)]
+                    break
+
+            else:
+                break  # no violation found: sequence is in plat form
+        else:
+            raise RuntimeError(
+                f'Tangle-to-braid conversion did not terminate after {max_iters} '
+                'iterations — the tangle may be very complex or there is a bug.'
+            )
+
+        # Verify the result is valid plat form
+        seen_x = False
+        seen_rc = False
+        for op, h in seq:
+            if op == '<':
+                if seen_x or seen_rc:
+                    raise AssertionError(f'LC after X or RC in plat-form output: {seq}')
+                if h % 2 != 0:
+                    raise AssertionError(f'LC at odd height {h} in plat-form output: {seq}')
+            elif op == 'X':
+                if seen_rc:
+                    raise AssertionError(f'X after RC in plat-form output: {seq}')
+                seen_x = True
+            elif op == '>':
+                if h % 2 != 0:
+                    raise AssertionError(f'RC at odd height {h} in plat-form output: {seq}')
+                seen_rc = True
+
+        braid = [h + 1 for op, h in seq if op == 'X']
+        return braid, num_cusps
+
     # --- Classical invariants ---
 
     @cached_property
     def num_components(self) -> int:
         b = self.braid
-        strand_num = 2 * (max(b) // 2 + 1)
+        strand_num = 2 * self.num_cusps
         parent = list(range(strand_num + 1))
 
         def find(x: int) -> int:
@@ -347,16 +711,17 @@ class Leg:
     @cached_property
     def rot(self) -> int:
         b = self.braid
+        if not b:
+            return 0
         m = max(b)
         h = m + 2 if m % 2 == 0 else m + 1
         backend = list(reversed([h - x for x in b]))
         return abs((self._trugrad(b, 1) + self._trugrad(backend, len(b))) // 2)
 
-    @cached_property
-    def ruling_invariant(self) -> Dict[int, int]:
+    def ruling_invariant(self, grading_mod: int = 0) -> Dict[int, int]:
         "Ruling polynomial as a dictionary with keys the degree and values the coefficient"
         c = self.num_cusps
-        return dict(Counter(len(r) - c + 1 for r in self.rulings()))
+        return dict(Counter(len(r) - c + 1 for r in self.rulings(grading_mod=grading_mod)))
 
     # --- DGA access ---
 
@@ -515,9 +880,9 @@ class Leg:
             self._rulings_cache[grading_mod] = result
         return self._rulings_cache[grading_mod]
 
-    def format_ruling_invariant(self) -> str:
+    def format_ruling_invariant(self, grading_mod: int = 0) -> str:
         """Format self.ruling_invariant as a polynomial string in z."""
-        d = self.ruling_invariant
+        d = self.ruling_invariant(grading_mod)
         if not d:
             return "0"
         terms = []
@@ -565,10 +930,101 @@ class Leg:
             result.append(s + [last - 0.5 if abs(last) % 2 == 1 else last + 0.5])
         return result
 
-    def draw(self, label_generators: bool = False):
+    def _trace_tangle(self) -> List[List[Tuple[float, float, bool]]]:
+        """
+        (x, y, cusp_tip) waypoints for each strand arc.
+        cusp_tip=True marks a left/right cusp extremum, where the tangent is
+        vertical; cusp_tip=False marks a regular waypoint with a horizontal tangent.
+        """
+        segments: List[List[Tuple[float, float, bool]]] = []
+        active: List[int] = []   # active[height] = segment index
+        x = 0.0
+        W = 2.0
+
+        for op, h in self.tangle:
+            x_L, x_R = x, x + W
+
+            if op == '<':
+                for i, seg_idx in enumerate(active):
+                    if segments[seg_idx][-1][0] < x_L:
+                        segments[seg_idx].append((x_L, -float(i), False))
+                    y_new = float(i + 2) if i >= h else float(i)
+                    segments[seg_idx].append((x_R, -y_new, False))
+                cusp_x = x_L + W * 0.5
+                seg_top = len(segments)
+                segments.append([(cusp_x, -(h + 0.5), True), (x_R, -float(h), False)])
+                seg_bot = len(segments)
+                segments.append([(cusp_x, -(h + 0.5), True), (x_R, -float(h + 1), False)])
+                active = active[:h] + [seg_top, seg_bot] + active[h:]
+
+            elif op == '>':
+                cusp_x = x_R - W * 0.5
+                for i, seg_idx in enumerate(active):
+                    if segments[seg_idx][-1][0] < x_L:
+                        segments[seg_idx].append((x_L, -float(i), False))
+                    if i in (h, h + 1):
+                        segments[seg_idx].append((cusp_x, -(h + 0.5), True))
+                    else:
+                        y_new = float(i - 2) if i > h + 1 else float(i)
+                        segments[seg_idx].append((x_R, -y_new, False))
+                active = active[:h] + active[h + 2:]
+
+            elif op == 'X':
+                for i, seg_idx in enumerate(active):
+                    if segments[seg_idx][-1][0] < x_L:
+                        segments[seg_idx].append((x_L, -float(i), False))
+                active[h], active[h + 1] = active[h + 1], active[h]
+                for i, seg_idx in enumerate(active):
+                    segments[seg_idx].append((x_R, -float(i), False))
+
+            x = x_R
+
+        return segments
+
+    def draw(self, label_generators: bool = False, use_tangle: bool = False):
         """Plot the front projection of this Leg. Returns a matplotlib Figure."""
         import matplotlib.pyplot as plt
         import numpy as np
+
+        if use_tangle:
+            if not hasattr(self, 'tangle'):
+                raise AttributeError(
+                    'This Leg has no stored tangle; '
+                    'initialize with a tangle sequence to use use_tangle=True'
+                )
+            segments = self._trace_tangle()
+            all_x = [pt[0] for seg in segments for pt in seg]
+            all_y = [pt[1] for seg in segments for pt in seg]
+            fig, ax = plt.subplots(figsize=(max(4, max(all_x) * 0.5), 3))
+            _cmap = plt.get_cmap('tab10')
+            colors = [_cmap(i) for i in range(10)]
+            t = np.linspace(0, 1, 50)
+            for k, seg in enumerate(segments):
+                px, py = [], []
+                for j in range(len(seg) - 1):
+                    x0, y0, tip0 = seg[j]
+                    x3, y3, tip3 = seg[j + 1]
+                    dx = x3 - x0
+                    # horizontal tangent at regular waypoints; zero velocity at cusp tips
+                    c1 = (x0, y0) if tip0 else (x0 + dx / 3, y0)
+                    c2 = (x3, y3) if tip3 else (x3 - dx / 3, y3)
+                    bx = ((1-t)**3 * x0 + 3*(1-t)**2*t * c1[0]
+                          + 3*(1-t)*t**2 * c2[0] + t**3 * x3)
+                    by = ((1-t)**3 * y0 + 3*(1-t)**2*t * c1[1]
+                          + 3*(1-t)*t**2 * c2[1] + t**3 * y3)
+                    if px:
+                        px.extend(bx[1:].tolist())
+                        py.extend(by[1:].tolist())
+                    else:
+                        px.extend(bx.tolist())
+                        py.extend(by.tolist())
+                ax.plot(px, py, color=colors[k % 10], linewidth=2,
+                        solid_capstyle='round', solid_joinstyle='round')
+            ax.yaxis.set_visible(False)
+            ax.xaxis.set_visible(False)
+            ax.set_title(f'Legendrian Knot  tangle = {self.tangle}')
+            plt.tight_layout()
+            return fig
 
         b = self.braid
         strands = self._trace_braid()
@@ -1095,7 +1551,7 @@ class DGA:
             else:
                 raw = aug_zn(d, grading_mod, modulus)
             self._augmentations_cache[grading_mod] = [
-                Augmentation(a, self) for a in raw
+                Augmentation(a, self, grading_mod) for a in raw
             ]
         return self._augmentations_cache[grading_mod]
 
@@ -1159,33 +1615,8 @@ class DGA:
         n = self.ring.modulus
         gs = self._gens_spaces
 
-        def rref_zn(mat):
-            m = [[x % n for x in row] for row in mat]
-            rows = len(m)
-            if not rows or not m[0]:
-                return m, []
-            cols = len(m[0])
-            pivot_cols, pivot_row = [], 0
-            for col in range(cols):
-                found = next((r for r in range(pivot_row, rows) if m[r][col] % n), -1)
-                if found == -1:
-                    continue
-                m[pivot_row], m[found] = m[found], m[pivot_row]
-                inv = pow(m[pivot_row][col], -1, n)
-                m[pivot_row] = [(x * inv) % n for x in m[pivot_row]]
-                for r in range(rows):
-                    if r != pivot_row and m[r][col] % n:
-                        factor = m[r][col]
-                        m[r] = [(m[r][j] - factor * m[pivot_row][j]) % n for j in range(cols)]
-                pivot_cols.append(col)
-                pivot_row += 1
-            return m, pivot_cols
-
         def rank_zn(mat):
-            if not mat or not mat[0]:
-                return 0
-            _, pivots = rref_zn(mat)
-            return len(pivots)
+            return _rank_zn(mat, n)
 
         def nullity_zn(mat):
             if not mat or not mat[0]:
@@ -1228,6 +1659,85 @@ class DGA:
         else:
             return self._dim_homology_zn(place, augmentation)
 
+    def _lin_hom_as_dict(self, augm: 'Augmentation', grading_mod: int) -> Dict[int, int]:
+        """
+        Poincaré-Chekanov polynomial for a single augmentation at grading_mod.
+
+        For grading_mod=0 uses the integer-graded chain complex (differential is
+        strictly degree -1 in ℤ, so adjacent-grade matrices are exact).
+        For grading_mod≥1 builds merged ℤ/n spaces and includes every ld_ε
+        contribution between the merged classes, which is required when skip-in-ℤ
+        terms still land in the correct ℤ/n grade.
+        """
+        gr = self.leg.grading
+
+        if grading_mod == 0:
+            gs = self._gens_spaces
+            max_g = max(gr)
+            result: Dict[int, int] = {}
+            for k in range(1, len(gs) + 1):
+                dim = self.dim_homology(k, augm)
+                if dim:
+                    result[max_g - k + 1] = dim
+            return result
+
+        n = grading_mod
+        # Group 1-indexed generators by grade mod n.
+        from collections import defaultdict
+        spaces: Dict[int, List[int]] = defaultdict(list)
+        for i, g in enumerate(gr):
+            spaces[g % n].append(i + 1)
+
+        if self.ring == GroundRing.Z2:
+            ld = self.lin_diff(augm)
+            ld_out = {i + 1: set(x for m in poly for x in m)
+                      for i, poly in enumerate(ld)}
+
+            def diff_mat_f2(gfrom: int, gto: int) -> List[List[int]]:
+                domain = spaces[gfrom % n]
+                rng = spaces[gto % n]
+                return [[1 if rg in ld_out.get(dg, set()) else 0
+                         for dg in domain] for rg in rng]
+
+            result = {}
+            for j in list(spaces):
+                mat_out = diff_mat_f2(j, (j - 1) % n)
+                mat_in  = diff_mat_f2((j + 1) % n, j)
+                dim = (len(spaces[j]) - _rank_f2(mat_out) - _rank_f2(mat_in))
+                if dim:
+                    result[j] = dim
+            return result
+
+        else:
+            zn_d = self.differential
+            augm_dict = augm.data
+            p = self.ring.modulus
+
+            def diff_mat_zp(gfrom: int, gto: int) -> List[List[int]]:
+                domain = spaces[gfrom % n]
+                rng = spaces[gto % n]
+                rng_idx = {g: i for i, g in enumerate(rng)}
+                mat = [[0] * len(domain) for _ in range(len(rng))]
+                for col, gen_d in enumerate(domain):
+                    for word, coeff in zn_d[gen_d - 1]:
+                        for pos, a in enumerate(word):
+                            if a in rng_idx:
+                                prod = coeff
+                                for li, b_gen in enumerate(word):
+                                    if li != pos:
+                                        prod = (prod * augm_dict.get(b_gen, 0)) % p
+                                mat[rng_idx[a]][col] = (mat[rng_idx[a]][col] + prod) % p
+                return mat
+
+            result = {}
+            for j in list(spaces):
+                mat_out = diff_mat_zp(j, (j - 1) % n)
+                mat_in  = diff_mat_zp((j + 1) % n, j)
+                dim = (len(spaces[j]) - _rank_zn(mat_out, p) - _rank_zn(mat_in, p))
+                if dim:
+                    result[j] = dim
+            return result
+
     def all_lin_hom(self, grading_mod: int = 0, format: bool = False):
         """
         Set of distinct Poincaré-Chekanov polynomials over all augmentations.
@@ -1238,15 +1748,9 @@ class DGA:
             raise NotImplementedError('all_lin_hom not implemented over Z[λ]')
         if grading_mod not in self._lin_hom_cache:
             augms = self.augmentations(grading_mod=grading_mod)
-            gs = self._gens_spaces
-            max_g = max(self.leg.grading)
             seen, results = set(), []
             for augm_obj in augms:
-                poly = {}
-                for k in range(1, len(gs) + 1):
-                    dim = self.dim_homology(k, augm_obj)
-                    if dim:
-                        poly[max_g - k + 1] = dim
+                poly = self._lin_hom_as_dict(augm_obj, grading_mod)
                 key = frozenset(poly.items())
                 if key not in seen:
                     seen.add(key)
@@ -1347,12 +1851,13 @@ class Augmentation:
     double_products                  (Z/2 only) cup-product table
     """
 
-    def __init__(self, data, dga: DGA) -> None:
+    def __init__(self, data, dga: DGA, grading_mod: int = 0) -> None:
         self.data = data
         self.dga = dga
+        self.grading_mod = grading_mod
 
     def __repr__(self) -> str:
-        return f'Augmentation({self.data!r}, ring={self.dga.ring!r})'
+        return f'Augmentation({self.data!r}, ring={self.dga.ring!r}, grading_mod={self.grading_mod!r})'
 
     @cached_property
     def lin_hom(self) -> Dict[int, int]:
@@ -1363,14 +1868,7 @@ class Augmentation:
         ring = self.dga.ring
         if ring == GroundRing.ZLAMBDA:
             raise NotImplementedError('lin_hom not implemented over Z[λ]')
-        gs = self.dga._gens_spaces
-        max_g = max(self.dga.leg.grading)
-        result = {}
-        for k in range(1, len(gs) + 1):
-            dim = self.dga.dim_homology(k, self)
-            if dim:
-                result[max_g - k + 1] = dim
-        return result
+        return self.dga._lin_hom_as_dict(self, self.grading_mod)
 
     def format_poincare(self) -> str:
         """Format self.lin_hom as a Poincaré polynomial string in t."""
@@ -1585,6 +2083,70 @@ ATLAS: Dict[str, List[List[int]]] = {
                  2, 5, 4]],
     'K15n41185': [[4, 5, 2, 1, 6, 7, 5, 6, 3, 2, 4, 5, 1, 7, 2, 6, 1, 3, 7, 5, 2, 1, 6,
                    7, 3, 2, 5, 4, 6, 1, 5, 2, 3, 7, 6, 1, 2, 5, 4]],
+    # ---- entries derived from grid atlas (rot != 0 or previously missing) ----
+    'K3_1': [[4, 3, 2, 1, 1, 3, 5, 3, 2, 1, 4, 3, 2, 3, 4]],
+    'K5_1': [[2, 1, 1, 3, 2, 2, 1, 3, 2, 2]],
+    'K5_2': [[4, 3, 3, 3, 2, 1, 5, 1, 3, 3, 2, 1, 4, 3, 2, 3, 4]],
+    'K6_3': [[4, 3, 2, 1, 1, 3, 5, 1, 2, 2, 2, 3, 4]],
+    'K7_1': [[6, 5, 4, 3, 3, 2, 1, 5, 4, 3, 2, 2, 4, 7, 1, 3, 2, 2, 5, 6]],
+    'K7_2': [[4, 3, 3, 3, 3, 5, 3, 2, 1, 1, 3, 3, 2, 1, 4, 3, 2, 3, 4]],
+    'K7_5': [[8, 7, 7, 6, 5, 5, 4, 3, 2, 1, 9, 8, 7, 1, 3, 5, 8, 5, 4, 3, 2, 1,
+              6, 5, 4, 3, 2, 5, 4, 3, 6, 5, 4, 5, 6]],
+    'K7_6': [[8, 7, 7, 6, 5, 4, 3, 3, 2, 1, 9, 5, 7, 1, 3, 7, 6, 5, 4, 3, 2, 1,
+              8, 7, 6, 5, 4, 3, 2, 7, 6, 5, 4, 3, 8, 7, 6, 5, 4, 7, 6, 5, 8, 7, 6, 7, 8]],
+    'K7_7': [[6, 5, 4, 3, 3, 2, 1, 5, 1, 3, 2, 4, 7, 3, 5, 3, 5, 4, 3, 2, 1,
+              6, 5, 4, 3, 2, 5, 4, 3, 6, 5, 4, 5, 6]],
+    'K8_20': [[4, 3, 2, 1, 6, 5, 4, 3, 2, 1, 1, 7, 2, 4, 6, 1, 7, 1, 4, 3, 2, 5, 4, 3,
+               4, 5, 5, 4, 3, 2, 1, 6, 5, 4, 3, 2, 5, 4, 3, 6, 5, 4, 5, 6]],
+    'K9_44': [[4, 3, 6, 5, 4, 3, 3, 2, 1, 4, 3, 2, 6, 1, 5, 2, 4, 7, 3, 6, 1, 5,
+               3, 6, 3, 2, 1, 4, 3, 2, 3, 4]],
+    'K9_45': [[4, 3, 8, 7, 7, 6, 5, 4, 3, 3, 2, 1, 7, 9, 4, 6, 1, 3, 7, 4, 5, 7, 6, 5,
+               4, 3, 2, 1, 8, 7, 6, 5, 4, 3, 2, 7, 6, 5, 4, 3, 8, 7, 6, 5, 4, 7, 6, 5,
+               8, 7, 6, 7, 8]],
+    'K9_47': [[2, 1, 6, 5, 8, 7, 6, 5, 5, 4, 3, 2, 1, 6, 9, 5, 4, 3, 8, 7, 1, 6, 9,
+               3, 5, 7, 6, 7, 8, 3, 2, 1, 4, 3, 2, 3, 4]],
+    'K10_140': [[4, 3, 6, 5, 4, 3, 3, 4, 3, 2, 1, 7, 4, 3, 2, 6, 1, 5, 2, 4, 1, 5, 2,
+                 3, 5, 4, 3, 2, 1, 6, 5, 4, 3, 2, 5, 4, 3, 6, 5, 4, 5, 6]],
+    'K10_145': [[2, 1, 4, 3, 2, 1, 1, 5, 2, 4, 5, 2, 4, 1, 5, 4, 3, 2, 2, 3, 4]],
+    'K10_161': [[6, 5, 4, 3, 8, 7, 6, 5, 4, 3, 3, 2, 1, 4, 3, 2, 9, 6, 8, 1, 5, 7, 9,
+                 2, 4, 6, 8, 6, 5, 4, 3, 2, 7, 6, 5, 4, 3, 6, 5, 4, 7, 6, 5, 6, 7,
+                 7, 6, 5, 4, 3, 2, 1, 8, 7, 6, 5, 4, 3, 2, 7, 6, 5, 4, 3, 8, 7, 6, 5,
+                 4, 7, 6, 5, 8, 7, 6, 7, 8]],
+    'K11n19': [[4, 3, 2, 1, 1, 3, 2, 5, 2, 1, 3, 2, 4, 3, 3, 2, 4]],
+    'mK7_3': [[2, 1, 1, 1, 3, 1, 2, 2, 1, 3, 2, 2]],
+    'mK7_4': [[4, 3, 3, 3, 2, 1, 1, 5, 1, 3, 1, 3, 2, 1, 4, 3, 2, 3, 4]],
+    'mK8_19': [[6, 5, 4, 3, 2, 1, 1, 3, 5, 7, 2, 4, 6, 6, 5, 4, 3, 2,
+                5, 4, 3, 6, 5, 4, 5, 6]],
+    'mK8_20': [[4, 3, 2, 1, 1, 3, 2, 5, 2, 1, 3, 2, 2, 3, 4]],
+    'mK9_43': [[2, 1, 4, 3, 2, 1, 5, 4, 3, 1, 2, 3, 3, 2, 4, 3, 3, 2, 4]],
+    'mK9_48': [[6, 5, 4, 3, 3, 3, 2, 1, 5, 4, 7, 1, 3, 4, 5, 3, 2, 1, 2, 3, 5, 4, 3,
+                2, 1, 6, 5, 4, 3, 2, 5, 4, 3, 6, 5, 4, 5, 6]],
+    'mK9_49': [[6, 5, 4, 3, 3, 3, 2, 1, 5, 7, 1, 3, 2, 4, 5, 4, 3, 2,
+                5, 4, 3, 6, 5, 4, 5, 6]],
+    'mK10_124': [[8, 7, 6, 5, 4, 3, 2, 1, 1, 3, 5, 7, 9, 2, 4, 6, 8, 8, 7, 6, 5, 4, 3,
+                  2, 7, 6, 5, 4, 3, 8, 7, 6, 5, 4, 7, 6, 5, 8, 7, 6, 7, 8]],
+    'mK10_128': [[6, 5, 5, 4, 3, 3, 2, 1, 5, 4, 3, 2, 7, 2, 4, 1, 3, 5, 5, 4, 3, 2, 1,
+                  6, 5, 4, 3, 2, 5, 4, 3, 6, 5, 4, 5, 6]],
+    'mK10_132': [[6, 5, 5, 7, 5, 4, 3, 2, 1, 6, 5, 4, 3, 2, 2, 4, 6, 1, 3, 5, 7, 5, 4,
+                  3, 2, 1, 6, 5, 4, 3, 2, 5, 4, 3, 6, 5, 4, 5, 6]],
+    'mK10_136': [[6, 5, 4, 3, 3, 5, 3, 2, 1, 4, 3, 2, 7, 2, 4, 1, 3, 5, 5, 4, 3, 2, 1,
+                  6, 5, 4, 3, 2, 5, 4, 3, 6, 5, 4, 5, 6]],
+    'mK10_139': [[6, 5, 4, 3, 3, 2, 1, 5, 7, 4, 6, 8, 3, 5, 7, 7, 6, 5, 4, 3, 8, 7, 6,
+                  5, 4, 7, 6, 5, 8, 7, 6, 7, 8, 1, 2]],
+    'mK10_142': [[6, 5, 4, 3, 3, 3, 2, 1, 5, 7, 6, 1, 3, 2, 4, 6, 5, 4, 3, 2,
+                  5, 4, 3, 6, 5, 4, 5, 6]],
+    'mK10_160': [[4, 3, 2, 1, 1, 3, 2, 2, 5, 1, 3, 2, 4, 2, 4, 3, 2, 3, 4]],
+    'mK11n38': [[8, 7, 6, 5, 5, 4, 3, 2, 1, 7, 6, 5, 4, 3, 2, 9, 2, 4, 6, 1, 3, 5, 7,
+                 7, 6, 5, 4, 3, 2, 1, 8, 7, 6, 5, 4, 3, 2, 7, 6, 5, 4, 3, 8, 7, 6, 5,
+                 4, 7, 6, 5, 8, 7, 6, 7, 8]],
+    'mK11n95': [[6, 5, 4, 3, 3, 5, 4, 7, 2, 6, 4, 3, 5, 2, 6, 1, 5, 4, 3,
+                 6, 5, 4, 5, 6, 1, 2]],
+    'mK11n118': [[2, 1, 6, 5, 8, 7, 6, 5, 5, 4, 3, 2, 1, 9, 6, 8, 1, 5, 7, 2, 4, 6, 9,
+                  7, 6, 5, 4, 3, 2, 7, 6, 5, 4, 3, 8, 7, 6, 5, 4, 7, 6, 5, 8, 7, 6, 7, 8]],
+    'mK12n242': [[4, 3, 2, 1, 1, 3, 5, 2, 4, 3, 3, 2, 4, 1, 3, 5, 2, 4, 4, 3, 2, 3, 4]],
+    'mK12n591': [[4, 3, 2, 1, 1, 3, 2, 5, 4, 2, 1, 4, 3, 5, 2, 4, 4, 3, 2, 3, 4]],
+    'mK15n41185': [[8, 7, 6, 5, 4, 3, 2, 1, 1, 3, 5, 7, 9, 2, 4, 6, 8, 3, 5, 7, 7, 6, 5,
+                    4, 3, 2, 8, 7, 6, 5, 4, 7, 6, 5, 8, 7, 6, 7, 8]],
 }
 
 
