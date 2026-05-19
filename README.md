@@ -9,7 +9,8 @@ The algorithms originate in a Mathematica notebook by Paul Melvin, extended by K
 | File | Description |
 |------|-------------|
 | `legendrian.py` | Primary API |
-| `test_legendrian.py` | Test suite |
+| `test_legendrian.py` | Test suite (654 tests) |
+| `auxiliary_data/grid_atlas.py` | XO grid-diagram representatives from the [Ng Legendrian atlas](https://sites.math.duke.edu/~ng/atlas/) |
 
 ## Quick Start
 
@@ -40,7 +41,7 @@ print(k.format_ruling_invariant())  #ruling polynomial as polynomial
 
 ## Input Format
 
-`Leg` accepts three input forms.
+`Leg` accepts four input forms.
 
 **Braid word** — a list of positive integers encoding the plat closure of a positive braid. The integer `i` represents σ_i, a positive crossing between strands `i` and `i+1` (1-indexed from the top). All left cusps share one x-coordinate and all right cusps share another.
 
@@ -77,6 +78,20 @@ Leg([('<', 0), ('X', 0), ('X', 0), ('<', 0), ('>', 0), ('>', 0)])
 
 The original tangle is stored as `self.tangle`. The `name` keyword argument works the same way as for the other input forms.
 
+**Grid diagram** — a 2-tuple of permutations `(X_perm, O_perm)`. `X_perm[j]` is the row of the X marker in column `j`; `O_perm[j]` is the row of the O marker in column `j`. Rows are 0-indexed from the **bottom**; columns are 0-indexed from the left.
+
+Conventions:
+- Vertical strands (in each column) pass **over** horizontal strands (in each row) at each crossing.
+- The Legendrian front projection is obtained by rotating the grid **45° counter-clockwise**. Under this rotation, horizontal segments become slope +1 arcs and vertical segments become slope −1 arcs. The markers become cusps or smooth kink points.
+- Left cusps arise where both the horizontal and vertical strand leave the marker going rightward (in the rotated diagram). Right cusps arise where both arrive from the left. Points where the strand transitions from slope −1 to slope +1 (or vice versa) without a cusp are kinks, handled internally.
+
+The code produces a tangle sequence from the grid and then converts it to plat form via Legendrian Reidemeister moves. Both `self.grid` and `self.tangle` are stored.
+
+```python
+Leg(([1, 0], [0, 1]))           # 2×2 grid: Legendrian unknot, tb = -1
+Leg(([0, 1, 2], [1, 2, 0]))     # 3×3 grid: once-stabilised unknot, tb = -2
+```
+
 ## Classes
 
 ### `Leg`
@@ -84,11 +99,12 @@ The original tangle is stored as `self.tangle`. The `name` keyword argument work
 A Legendrian knot or link.
 
 ```python
-Leg([2,2,2])        # from braid word (list of positive ints)
-Leg('mK3_1')        # unique atlas entry
-Leg('mK3_1.0')      # also works
-Leg('mK5_2.0')      # first of two reps, 0-indexed
+Leg([2,2,2])                          # from braid word (list of positive ints)
+Leg('mK3_1')                          # unique atlas entry
+Leg('mK3_1.0')                        # also works
+Leg('mK5_2.0')                        # first of two reps, 0-indexed
 Leg([('<', 0), ('X', 0), ('>', 0)])   # from tangle decomposition
+Leg(([1, 0], [0, 1]))                 # from grid diagram (2-tuple of permutations)
 ```
 
 **Classical invariants** (computed once, cached):

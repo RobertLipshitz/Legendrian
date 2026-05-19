@@ -43,7 +43,7 @@ Atlas naming convention
 
 Input format
 ------------
-Leg accepts three input forms.
+Leg accepts four input forms.
 
 Braid word — a list of positive integers encoding the plat closure of a positive
 braid.  Generator i represents a positive crossing between strands i and i+1
@@ -63,6 +63,18 @@ The code converts the tangle to plat form internally using Legendrian Reidemeist
 II moves, and stores the original sequence as self.tangle.
 
     Leg([('<', 0), ('<', 0), ('X', 1), ('X', 0), ('X', 1), ('>', 0), ('>', 0)])
+
+Grid diagram — a pair of permutations (X_perm, O_perm) passed as a 2-tuple of
+lists.  X_perm[j] is the row of the X marker in column j; O_perm[j] is the row
+of the O marker in column j.  Rows are 0-indexed from the bottom; columns are
+0-indexed from the left.  Vertical strands pass over horizontal strands.  The
+Legendrian front projection is obtained by rotating the grid 45° counter-
+clockwise, which maps horizontal segments to slope +1 and vertical segments to
+slope -1.  The algorithm detects left cusps, right cusps, crossings, and kinks
+(transitions between horizontal and vertical strands), produces a tangle
+sequence, and converts it to plat form via Legendrian Reidemeister moves.
+
+    Leg(([1, 0], [0, 1]))   2×2 grid for the Legendrian unknot (tb = -1)
 
 Atlas name — a string key into the built-in ATLAS dictionary.
 
@@ -226,6 +238,17 @@ class Leg:
                         op is '<' (left cusp), '>' (right cusp), or 'X' (crossing);
                         heights are 0-indexed from the top at the current strand count.
                         Converted to plat form internally; stored as self.tangle.
+    Leg((X_perm, O_perm))
+                        grid diagram — a pair of permutations (as lists of ints).
+                        X_perm[j] is the row of the X marker in column j,
+                        O_perm[j] is the row of the O marker in column j,
+                        with rows 0-indexed from the bottom and columns
+                        0-indexed from the left.  Vertical strands go over
+                        horizontal strands.  The Legendrian front is obtained
+                        by rotating the grid 45° counter-clockwise; the result
+                        is converted to a tangle and then to plat form.
+                        Stored as self.grid; the intermediate tangle is stored
+                        as self.tangle.
 
     Classical invariants  (computed once, cached as properties)
     -----------------------------------------------------------
@@ -251,13 +274,30 @@ class Leg:
 
     def __init__(
         self,
-        input: Union[List[int], List[tuple], str],
+        input: Union[List[int], List[tuple], str, tuple],
         name: Optional[str] = None,
     ) -> None:
-        _is_tangle = (
-            isinstance(input, list) and bool(input) and isinstance(input[0], tuple)
+        _is_grid = (
+            isinstance(input, tuple) and len(input) == 2
+            and isinstance(input[0], (list, tuple))
+            and isinstance(input[1], (list, tuple))
         )
-        if _is_tangle:
+        _is_tangle = (
+            not _is_grid
+            and isinstance(input, list) and bool(input) and isinstance(input[0], tuple)
+        )
+        if _is_grid:
+            X_perm, O_perm = list(input[0]), list(input[1])
+            Leg._validate_grid(X_perm, O_perm)
+            _tangle = Leg._grid_to_tangle(X_perm, O_perm)
+            Leg._validate_tangle(_tangle)
+            _braid, _ncusps = Leg._tangle_to_braid(_tangle)
+            self.grid: Tuple[List[int], List[int]] = (X_perm, O_perm)
+            self.tangle: List[tuple] = _tangle
+            self.braid: List[int] = _braid
+            self.num_cusps: int = _ncusps
+            self.name: str = name if name is not None else repr(input)
+        elif _is_tangle:
             Leg._validate_tangle(input)
             _braid, _ncusps = Leg._tangle_to_braid(input)
             self.tangle: List[tuple] = list(input)
@@ -295,15 +335,132 @@ class Leg:
         else:
             raise TypeError(
                 f'Expected a braid word (list of int), tangle sequence (list of tuples), '
-                f'or atlas name (str), got {type(input).__name__!r}'
+                f'atlas name (str), or grid diagram (tuple of two lists), '
+                f'got {type(input).__name__!r}'
             )
-        if not _is_tangle:
+        if not _is_tangle and not _is_grid:
             self.num_cusps = max(self.braid) // 2 + 1
         self._dga_cache: Dict[GroundRing, DGA] = {}
         self._rulings_cache: Dict[int, List[List[int]]] = {}
 
     def __repr__(self) -> str:
         return f'Leg({self.name!r})'
+
+    @staticmethod
+    def _validate_grid(X_perm, O_perm) -> None:
+        """Raise ValueError if the grid diagram is invalid."""
+        n = len(X_perm)
+        if len(O_perm) != n:
+            raise ValueError('X and O permutations must have the same length')
+        if n < 2:
+            raise ValueError(f'Grid size must be at least 2, got {n}')
+        if sorted(X_perm) != list(range(n)) or sorted(O_perm) != list(range(n)):
+            raise ValueError('X and O must each be a permutation of {0, …, n-1}')
+        if any(X_perm[j] == O_perm[j] for j in range(n)):
+            raise ValueError('X and O markers cannot occupy the same cell')
+
+    @staticmethod
+    def _grid_to_tangle(X_perm, O_perm) -> List[tuple]:
+        """
+        Convert a grid diagram (two permutations, row 0 at bottom) to a tangle sequence.
+
+        X_perm[j] = row of the X marker in column j.
+        O_perm[j] = row of the O marker in column j.
+
+        After a 45° CCW rotation, the diagram becomes a Legendrian front whose events
+        are read left-to-right by new_x = col − row.  Horizontal grid segments become
+        slope +1 strands; vertical segments become slope −1 strands.  Each marker is
+        either a left cusp, a right cusp, or a kink (slope change with no new_x extremum).
+        Each interior cell whose row lies strictly between the two markers in its column
+        and whose column lies within its row's horizontal span is a crossing.
+        """
+        n = len(X_perm)
+
+        # Inverse permutations: x_col[r] / o_col[r] = column of X/O in row r
+        x_col = [0] * n
+        o_col = [0] * n
+        for j in range(n):
+            x_col[X_perm[j]] = j
+            o_col[O_perm[j]] = j
+
+        # Collect all events as (new_x, new_z, type, col j, row r)
+        # new_x = j - r, new_z = j + r
+        events: List[tuple] = []
+
+        for j in range(n):
+            for r, is_x in [(X_perm[j], True), (O_perm[j], False)]:
+                other_col = o_col[r] if is_x else x_col[r]
+                other_row = O_perm[j] if is_x else X_perm[j]
+                nx, nz = j - r, j + r
+
+                if other_col > j and other_row < r:
+                    events.append((nx, nz, 'LC', j, r))
+                elif other_col < j and other_row > r:
+                    events.append((nx, nz, 'RC', j, r))
+                elif other_col > j:  # other_row > r: V_j → H_r (V ends, H starts)
+                    events.append((nx, nz, 'KVH', j, r))
+                else:               # other_col < j, other_row < r: H_r → V_j
+                    events.append((nx, nz, 'KHV', j, r))
+
+        # Crossings: cell (j, r) where vertical in col j spans row r strictly,
+        # horizontal in row r spans col j, and (j, r) is not a marker.
+        for j in range(n):
+            lo, hi = min(X_perm[j], O_perm[j]), max(X_perm[j], O_perm[j])
+            for r in range(lo + 1, hi):
+                L_r = min(x_col[r], o_col[r])
+                R_r = max(x_col[r], o_col[r])
+                if L_r <= j <= R_r:
+                    events.append((j - r, j + r, 'X', j, r))
+
+        # Process top-to-bottom within each new_x value (descending new_z)
+        events.sort(key=lambda e: (e[0], -e[1]))
+
+        # Active strands: mutable [intercept, slope, label]
+        # Horizontal in row r : slope=+1, intercept=2r  → new_z = new_x + 2r
+        # Vertical   in col j : slope=−1, intercept=2j  → new_z = −new_x + 2j
+        active: List[List] = []
+
+        def nz_of(strand, nx):
+            return strand[1] * nx + strand[0]
+
+        def height_above(nx, nz_ref):
+            return sum(1 for s in active if nz_of(s, nx) > nz_ref)
+
+        def find(label):
+            for s in active:
+                if s[2] == label:
+                    return s
+            raise AssertionError(f'strand {label} missing from active set')
+
+        tangle: List[tuple] = []
+
+        for nx, nz, etype, j, r in events:
+            if etype == 'LC':
+                h = height_above(nx, nz)
+                tangle.append(('<', h))
+                # horizontal (above, slope+1) then vertical (below, slope−1)
+                active.append([2 * r, +1, ('H', r)])
+                active.append([2 * j, -1, ('V', j)])
+
+            elif etype == 'RC':
+                h = height_above(nx, nz)
+                tangle.append(('>', h))
+                active.remove(find(('H', r)))
+                active.remove(find(('V', j)))
+
+            elif etype == 'KVH':   # vertical in col j → horizontal in row r
+                s = find(('V', j))
+                s[0], s[1], s[2] = 2 * r, +1, ('H', r)
+
+            elif etype == 'KHV':   # horizontal in row r → vertical in col j
+                s = find(('H', r))
+                s[0], s[1], s[2] = 2 * j, -1, ('V', j)
+
+            else:   # crossing
+                h = height_above(nx, nz)
+                tangle.append(('X', h))
+
+        return tangle
 
     @staticmethod
     def _validate_tangle(tangle) -> None:
@@ -378,11 +535,12 @@ class Leg:
                 # Rule B: RC(j) · X(h) — move RC right past X (h in post-RC config)
                 elif op_a == '>' and op_b == 'X':
                     j, h = h_a, h_b
-                    if h < j:
-                        seq[i], seq[i + 1] = ('X', h), ('>', j)
-                    elif h == j - 1:
-                        # LR-II: RC falls by 1, two extra crossings in pre-RC config
+                    if h == j - 1:
+                        # LR-II: h+1 == j is a removed position, so strands are
+                        # non-adjacent in pre-RC config; RC falls by 1
                         seq[i:i + 2] = [('X', j + 1), ('X', j), ('X', j - 1), ('>', j + 1)]
+                    elif h < j:
+                        seq[i], seq[i + 1] = ('X', h), ('>', j)
                     else:  # h >= j
                         seq[i], seq[i + 1] = ('X', h + 2), ('>', j)
                     break
@@ -1853,6 +2011,70 @@ ATLAS: Dict[str, List[List[int]]] = {
                  2, 5, 4]],
     'K15n41185': [[4, 5, 2, 1, 6, 7, 5, 6, 3, 2, 4, 5, 1, 7, 2, 6, 1, 3, 7, 5, 2, 1, 6,
                    7, 3, 2, 5, 4, 6, 1, 5, 2, 3, 7, 6, 1, 2, 5, 4]],
+    # ---- entries derived from grid atlas (rot != 0 or previously missing) ----
+    'K3_1': [[4, 3, 2, 1, 1, 3, 5, 3, 2, 1, 4, 3, 2, 3, 4]],
+    'K5_1': [[2, 1, 1, 3, 2, 2, 1, 3, 2, 2]],
+    'K5_2': [[4, 3, 3, 3, 2, 1, 5, 1, 3, 3, 2, 1, 4, 3, 2, 3, 4]],
+    'K6_3': [[4, 3, 2, 1, 1, 3, 5, 1, 2, 2, 2, 3, 4]],
+    'K7_1': [[6, 5, 4, 3, 3, 2, 1, 5, 4, 3, 2, 2, 4, 7, 1, 3, 2, 2, 5, 6]],
+    'K7_2': [[4, 3, 3, 3, 3, 5, 3, 2, 1, 1, 3, 3, 2, 1, 4, 3, 2, 3, 4]],
+    'K7_5': [[8, 7, 7, 6, 5, 5, 4, 3, 2, 1, 9, 8, 7, 1, 3, 5, 8, 5, 4, 3, 2, 1,
+              6, 5, 4, 3, 2, 5, 4, 3, 6, 5, 4, 5, 6]],
+    'K7_6': [[8, 7, 7, 6, 5, 4, 3, 3, 2, 1, 9, 5, 7, 1, 3, 7, 6, 5, 4, 3, 2, 1,
+              8, 7, 6, 5, 4, 3, 2, 7, 6, 5, 4, 3, 8, 7, 6, 5, 4, 7, 6, 5, 8, 7, 6, 7, 8]],
+    'K7_7': [[6, 5, 4, 3, 3, 2, 1, 5, 1, 3, 2, 4, 7, 3, 5, 3, 5, 4, 3, 2, 1,
+              6, 5, 4, 3, 2, 5, 4, 3, 6, 5, 4, 5, 6]],
+    'K8_20': [[4, 3, 2, 1, 6, 5, 4, 3, 2, 1, 1, 7, 2, 4, 6, 1, 7, 1, 4, 3, 2, 5, 4, 3,
+               4, 5, 5, 4, 3, 2, 1, 6, 5, 4, 3, 2, 5, 4, 3, 6, 5, 4, 5, 6]],
+    'K9_44': [[4, 3, 6, 5, 4, 3, 3, 2, 1, 4, 3, 2, 6, 1, 5, 2, 4, 7, 3, 6, 1, 5,
+               3, 6, 3, 2, 1, 4, 3, 2, 3, 4]],
+    'K9_45': [[4, 3, 8, 7, 7, 6, 5, 4, 3, 3, 2, 1, 7, 9, 4, 6, 1, 3, 7, 4, 5, 7, 6, 5,
+               4, 3, 2, 1, 8, 7, 6, 5, 4, 3, 2, 7, 6, 5, 4, 3, 8, 7, 6, 5, 4, 7, 6, 5,
+               8, 7, 6, 7, 8]],
+    'K9_47': [[2, 1, 6, 5, 8, 7, 6, 5, 5, 4, 3, 2, 1, 6, 9, 5, 4, 3, 8, 7, 1, 6, 9,
+               3, 5, 7, 6, 7, 8, 3, 2, 1, 4, 3, 2, 3, 4]],
+    'K10_140': [[4, 3, 6, 5, 4, 3, 3, 4, 3, 2, 1, 7, 4, 3, 2, 6, 1, 5, 2, 4, 1, 5, 2,
+                 3, 5, 4, 3, 2, 1, 6, 5, 4, 3, 2, 5, 4, 3, 6, 5, 4, 5, 6]],
+    'K10_145': [[2, 1, 4, 3, 2, 1, 1, 5, 2, 4, 5, 2, 4, 1, 5, 4, 3, 2, 2, 3, 4]],
+    'K10_161': [[6, 5, 4, 3, 8, 7, 6, 5, 4, 3, 3, 2, 1, 4, 3, 2, 9, 6, 8, 1, 5, 7, 9,
+                 2, 4, 6, 8, 6, 5, 4, 3, 2, 7, 6, 5, 4, 3, 6, 5, 4, 7, 6, 5, 6, 7,
+                 7, 6, 5, 4, 3, 2, 1, 8, 7, 6, 5, 4, 3, 2, 7, 6, 5, 4, 3, 8, 7, 6, 5,
+                 4, 7, 6, 5, 8, 7, 6, 7, 8]],
+    'K11n19': [[4, 3, 2, 1, 1, 3, 2, 5, 2, 1, 3, 2, 4, 3, 3, 2, 4]],
+    'mK7_3': [[2, 1, 1, 1, 3, 1, 2, 2, 1, 3, 2, 2]],
+    'mK7_4': [[4, 3, 3, 3, 2, 1, 1, 5, 1, 3, 1, 3, 2, 1, 4, 3, 2, 3, 4]],
+    'mK8_19': [[6, 5, 4, 3, 2, 1, 1, 3, 5, 7, 2, 4, 6, 6, 5, 4, 3, 2,
+                5, 4, 3, 6, 5, 4, 5, 6]],
+    'mK8_20': [[4, 3, 2, 1, 1, 3, 2, 5, 2, 1, 3, 2, 2, 3, 4]],
+    'mK9_43': [[2, 1, 4, 3, 2, 1, 5, 4, 3, 1, 2, 3, 3, 2, 4, 3, 3, 2, 4]],
+    'mK9_48': [[6, 5, 4, 3, 3, 3, 2, 1, 5, 4, 7, 1, 3, 4, 5, 3, 2, 1, 2, 3, 5, 4, 3,
+                2, 1, 6, 5, 4, 3, 2, 5, 4, 3, 6, 5, 4, 5, 6]],
+    'mK9_49': [[6, 5, 4, 3, 3, 3, 2, 1, 5, 7, 1, 3, 2, 4, 5, 4, 3, 2,
+                5, 4, 3, 6, 5, 4, 5, 6]],
+    'mK10_124': [[8, 7, 6, 5, 4, 3, 2, 1, 1, 3, 5, 7, 9, 2, 4, 6, 8, 8, 7, 6, 5, 4, 3,
+                  2, 7, 6, 5, 4, 3, 8, 7, 6, 5, 4, 7, 6, 5, 8, 7, 6, 7, 8]],
+    'mK10_128': [[6, 5, 5, 4, 3, 3, 2, 1, 5, 4, 3, 2, 7, 2, 4, 1, 3, 5, 5, 4, 3, 2, 1,
+                  6, 5, 4, 3, 2, 5, 4, 3, 6, 5, 4, 5, 6]],
+    'mK10_132': [[6, 5, 5, 7, 5, 4, 3, 2, 1, 6, 5, 4, 3, 2, 2, 4, 6, 1, 3, 5, 7, 5, 4,
+                  3, 2, 1, 6, 5, 4, 3, 2, 5, 4, 3, 6, 5, 4, 5, 6]],
+    'mK10_136': [[6, 5, 4, 3, 3, 5, 3, 2, 1, 4, 3, 2, 7, 2, 4, 1, 3, 5, 5, 4, 3, 2, 1,
+                  6, 5, 4, 3, 2, 5, 4, 3, 6, 5, 4, 5, 6]],
+    'mK10_139': [[6, 5, 4, 3, 3, 2, 1, 5, 7, 4, 6, 8, 3, 5, 7, 7, 6, 5, 4, 3, 8, 7, 6,
+                  5, 4, 7, 6, 5, 8, 7, 6, 7, 8, 1, 2]],
+    'mK10_142': [[6, 5, 4, 3, 3, 3, 2, 1, 5, 7, 6, 1, 3, 2, 4, 6, 5, 4, 3, 2,
+                  5, 4, 3, 6, 5, 4, 5, 6]],
+    'mK10_160': [[4, 3, 2, 1, 1, 3, 2, 2, 5, 1, 3, 2, 4, 2, 4, 3, 2, 3, 4]],
+    'mK11n38': [[8, 7, 6, 5, 5, 4, 3, 2, 1, 7, 6, 5, 4, 3, 2, 9, 2, 4, 6, 1, 3, 5, 7,
+                 7, 6, 5, 4, 3, 2, 1, 8, 7, 6, 5, 4, 3, 2, 7, 6, 5, 4, 3, 8, 7, 6, 5,
+                 4, 7, 6, 5, 8, 7, 6, 7, 8]],
+    'mK11n95': [[6, 5, 4, 3, 3, 5, 4, 7, 2, 6, 4, 3, 5, 2, 6, 1, 5, 4, 3,
+                 6, 5, 4, 5, 6, 1, 2]],
+    'mK11n118': [[2, 1, 6, 5, 8, 7, 6, 5, 5, 4, 3, 2, 1, 9, 6, 8, 1, 5, 7, 2, 4, 6, 9,
+                  7, 6, 5, 4, 3, 2, 7, 6, 5, 4, 3, 8, 7, 6, 5, 4, 7, 6, 5, 8, 7, 6, 7, 8]],
+    'mK12n242': [[4, 3, 2, 1, 1, 3, 5, 2, 4, 3, 3, 2, 4, 1, 3, 5, 2, 4, 4, 3, 2, 3, 4]],
+    'mK12n591': [[4, 3, 2, 1, 1, 3, 2, 5, 4, 2, 1, 4, 3, 5, 2, 4, 4, 3, 2, 3, 4]],
+    'mK15n41185': [[8, 7, 6, 5, 4, 3, 2, 1, 1, 3, 5, 7, 9, 2, 4, 6, 8, 3, 5, 7, 7, 6, 5,
+                    4, 3, 2, 8, 7, 6, 5, 4, 7, 6, 5, 8, 7, 6, 7, 8]],
 }
 
 

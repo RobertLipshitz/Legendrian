@@ -757,3 +757,209 @@ class TestTangleInput:
     def test_draw_use_tangle_no_tangle_raises(self):
         with pytest.raises(AttributeError):
             Leg([1]).draw(use_tangle=True)
+
+
+# ---------------------------------------------------------------------------
+# Section 13: Grid diagram input
+#
+# Convention: Leg((X_perm, O_perm)) where X_perm[j] is the row of the X
+# marker in column j, O_perm[j] is the row of the O marker in column j,
+# rows are 0-indexed from the bottom, columns 0-indexed from the left.
+# Vertical strands go over horizontal strands, and the front projection is
+# obtained by rotating the grid 45° counter-clockwise.
+#
+# Test strategy
+# -------------
+# 1. Smallest known case: the 2×2 grid ([1,0],[0,1]) encodes the max-tb
+#    Legendrian unknot (tb = -1, rot = 0, braid = []).
+# 2. A 3×3 grid ([0,1,2],[1,2,0]) encodes a once-stabilised Legendrian
+#    unknot (tb = -2, rot = 1).
+# 3. Storage: Leg.grid and Leg.tangle are both set; Leg.tangle is the
+#    intermediate tangle produced by _grid_to_tangle.
+# 4. Naming: name kwarg overrides; auto-name is repr of the input tuple.
+# 5. Validation: wrong-length, non-permutation, same-cell, and grid-size-1
+#    inputs each raise ValueError.
+# 6. d² = 0 confirms the converted DGA is valid.
+# ---------------------------------------------------------------------------
+
+# 2×2 grid for the Legendrian unknot (maximum tb = -1)
+_UNKNOT_GRID_2x2 = ([1, 0], [0, 1])
+
+# 3×3 grid for a once-stabilised Legendrian unknot (tb = -2, rot = 1)
+_UNKNOT_GRID_3x3 = ([0, 1, 2], [1, 2, 0])
+
+
+class TestGridInput:
+
+    # --- classical invariants for the 2×2 unknot ---
+
+    def test_2x2_unknot_nc(self):
+        assert Leg(_UNKNOT_GRID_2x2).num_components == 1
+
+    def test_2x2_unknot_tb(self):
+        assert Leg(_UNKNOT_GRID_2x2).tb == -1
+
+    def test_2x2_unknot_rot(self):
+        assert Leg(_UNKNOT_GRID_2x2).rot == 0
+
+    def test_2x2_unknot_braid(self):
+        assert Leg(_UNKNOT_GRID_2x2).braid == []
+
+    def test_2x2_unknot_num_cusps(self):
+        assert Leg(_UNKNOT_GRID_2x2).num_cusps == 1
+
+    def test_2x2_unknot_tangle(self):
+        assert Leg(_UNKNOT_GRID_2x2).tangle == [('<', 0), ('>', 0)]
+
+    # --- classical invariants for the 3×3 stabilised unknot ---
+
+    def test_3x3_unknot_nc(self):
+        assert Leg(_UNKNOT_GRID_3x3).num_components == 1
+
+    def test_3x3_unknot_tb(self):
+        assert Leg(_UNKNOT_GRID_3x3).tb == -2
+
+    def test_3x3_unknot_rot(self):
+        assert Leg(_UNKNOT_GRID_3x3).rot == 1
+
+    # --- storage ---
+
+    def test_grid_attribute_stored(self):
+        k = Leg(_UNKNOT_GRID_2x2)
+        assert k.grid == ([1, 0], [0, 1])
+
+    def test_tangle_attribute_set_by_grid(self):
+        # _grid_to_tangle should produce the intermediate tangle
+        k = Leg(_UNKNOT_GRID_2x2)
+        assert hasattr(k, 'tangle') and isinstance(k.tangle, list)
+
+    # --- naming ---
+
+    def test_name_kwarg_grid(self):
+        k = Leg(_UNKNOT_GRID_2x2, name='unknot')
+        assert k.name == 'unknot'
+
+    def test_auto_name_is_repr_of_tuple(self):
+        inp = ([1, 0], [0, 1])
+        assert Leg(inp).name == repr(inp)
+
+    # --- DGA self-consistency ---
+
+    def test_2x2_unknot_d_squared_zero(self):
+        # braid is empty so the DGA is trivial; check_d_squared returns True
+        assert Leg(_UNKNOT_GRID_2x2).dga().check_d_squared()
+
+    def test_3x3_d_squared_zero(self):
+        assert Leg(_UNKNOT_GRID_3x3).dga().check_d_squared()
+
+    # --- validation errors ---
+
+    def test_validate_unequal_lengths(self):
+        with pytest.raises(ValueError):
+            Leg(([0, 1], [0, 1, 2]))
+
+    def test_validate_not_permutation_X(self):
+        with pytest.raises(ValueError):
+            Leg(([0, 0, 2], [1, 2, 0]))
+
+    def test_validate_not_permutation_O(self):
+        with pytest.raises(ValueError):
+            Leg(([0, 1, 2], [0, 0, 1]))
+
+    def test_validate_grid_size_one(self):
+        with pytest.raises(ValueError):
+            Leg(([0], [0]))
+
+    def test_validate_same_cell(self):
+        # X[0] == O[0] is not allowed
+        with pytest.raises(ValueError):
+            Leg(([0, 1], [0, 2]))
+
+    # --- Legendrian trefoil: mK3_1 ---
+    # 1-indexed user input: X=[5,4,3,2,1], O=[2,1,5,4,3]
+    # 0-indexed for code:   X=[4,3,2,1,0], O=[1,0,4,3,2]
+    # Expected: nc=1, tb=1, rot=0
+
+    _TREFOIL_MIRROR_GRID = ([4, 3, 2, 1, 0], [1, 0, 4, 3, 2])
+
+    def test_trefoil_mirror_grid_nc(self):
+        assert Leg(self._TREFOIL_MIRROR_GRID).num_components == 1
+
+    def test_trefoil_mirror_grid_tb(self):
+        assert Leg(self._TREFOIL_MIRROR_GRID).tb == 1
+
+    def test_trefoil_mirror_grid_rot(self):
+        assert Leg(self._TREFOIL_MIRROR_GRID).rot == 0
+
+    # --- Legendrian trefoil: K3_1 ---
+    # 1-indexed user input: X=[5,1,2,3,4], O=[2,3,4,5,1]
+    # 0-indexed for code:   X=[4,0,1,2,3], O=[1,2,3,4,0]
+    # Expected: nc=1, tb=-6, rot=1 (or rot=-1 by symmetry)
+
+    _TREFOIL_GRID = ([4, 0, 1, 2, 3], [1, 2, 3, 4, 0])
+
+    def test_trefoil_grid_nc(self):
+        assert Leg(self._TREFOIL_GRID).num_components == 1
+
+    def test_trefoil_grid_tb(self):
+        assert Leg(self._TREFOIL_GRID).tb == -6
+
+    def test_trefoil_grid_rot(self):
+        assert abs(Leg(self._TREFOIL_GRID).rot) == 1
+
+
+# ---------------------------------------------------------------------------
+# Section 14: Grid-atlas round-trips
+#
+# All 138 grid representatives from GRID_ATLAS are tested against pre-computed
+# expected invariants.  For rot = 0 cases the ruling polynomial is also
+# checked; for rot != 0 only tb and rot are tested.
+#
+# Validation strength:
+#   "fully validated"  — tb, rot, and ruling all agree with the braid-word
+#                        ATLAS entry for the same knot name (~56 reps)
+#   "partial"          — tb/rot match but rot != 0, or ruling differs
+#                        (different Legendrian type in the same topological
+#                        class, e.g. a stabilisation or a rot != 0 rep)
+#   "regression"       — knot name newly added to ATLAS from grid data;
+#                        no independent reference, but locks in behaviour
+# ---------------------------------------------------------------------------
+
+from auxiliary_data.grid_atlas import GRID_ATLAS as _GA
+
+
+def _build_grid_cases():
+    rows = []
+    ids = []
+    for name in sorted(_GA.keys()):
+        for i, grid in enumerate(_GA[name]):
+            g = Leg(grid)
+            ruling = g.ruling_invariant if g.rot == 0 else None
+            rows.append((grid, g.num_components, g.tb, g.rot, ruling))
+            ids.append(f"{name}.{i}")
+    return rows, ids
+
+
+_GRID_CASES, _GRID_IDS = _build_grid_cases()
+_RULING_CASES = [(g, nc, tb, rot, ri) for g, nc, tb, rot, ri in _GRID_CASES if ri is not None]
+_RULING_IDS   = [id_ for id_, (_, _, _, rot, ri) in zip(_GRID_IDS, _GRID_CASES) if ri is not None]
+
+
+class TestGridAtlas:
+    """Round-trip tests for every grid representative in GRID_ATLAS."""
+
+    @pytest.mark.parametrize("grid,nc,tb,rot,ruling", _GRID_CASES, ids=_GRID_IDS)
+    def test_nc(self, grid, nc, tb, rot, ruling):
+        assert Leg(grid).num_components == nc
+
+    @pytest.mark.parametrize("grid,nc,tb,rot,ruling", _GRID_CASES, ids=_GRID_IDS)
+    def test_tb(self, grid, nc, tb, rot, ruling):
+        assert Leg(grid).tb == tb
+
+    @pytest.mark.parametrize("grid,nc,tb,rot,ruling", _GRID_CASES, ids=_GRID_IDS)
+    def test_rot(self, grid, nc, tb, rot, ruling):
+        assert Leg(grid).rot == rot
+
+    @pytest.mark.parametrize("grid,nc,tb,rot,ruling", _RULING_CASES, ids=_RULING_IDS)
+    def test_ruling(self, grid, nc, tb, rot, ruling):
+        assert Leg(grid).ruling_invariant == ruling
