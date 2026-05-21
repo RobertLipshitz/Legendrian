@@ -106,7 +106,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from __future__ import annotations
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 import re
 from collections import Counter
@@ -537,14 +537,38 @@ class Leg:
             )
 
     @staticmethod
-    def _tangle_to_braid(tangle) -> Tuple[List[int], int]:
+    def _tangle_to_braid(tangle, debug_dir=None) -> Tuple[List[int], int]:
         """
         Convert a validated tangle sequence to (braid_word_1indexed, num_cusps).
         Applies LR-II commutation rules until plat form, then extracts braid word.
+
+        If debug_dir is a path, saves a tangle picture after each rule application.
         """
+        import os
         seq = list(tangle)
         num_cusps = sum(1 for op, _ in seq if op == '<')
         max_iters = max(10000, len(seq) ** 2 * 50)
+        step = 0
+
+        def _save_debug(rule_name):
+            nonlocal step
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+            stub = object.__new__(Leg)
+            stub.tangle = seq[:]
+            fig = stub.draw(use_tangle=True)
+            for line in fig.axes[0].get_lines():
+                line.set_color('black')
+            fig.axes[0].set_title(f'Step {step}: {rule_name}\n{seq}', fontsize=7)
+            path = os.path.join(debug_dir, f'step_{step:04d}_{rule_name}.png')
+            fig.savefig(path, dpi=80, bbox_inches='tight')
+            plt.close(fig)
+            step += 1
+
+        if debug_dir:
+            os.makedirs(debug_dir, exist_ok=True)
+            _save_debug('initial')
 
         for _ in range(max_iters):
             for i in range(len(seq) - 1):
@@ -556,11 +580,15 @@ class Leg:
                     h, j = h_a, h_b
                     if h <= j - 2:
                         seq[i], seq[i + 1] = ('<', j), ('X', h)
+                        rule = 'A_commute'
                     elif h == j - 1:
                         # LR-II: cusp rises by 1, two extra crossings in post-LC config
                         seq[i:i + 2] = [('<', j - 1), ('X', j + 1), ('X', j), ('X', j - 1)]
+                        rule = 'A_LR2'
                     else:  # h >= j
                         seq[i], seq[i + 1] = ('<', j), ('X', h + 2)
+                        rule = 'A_commute'
+                    if debug_dir: _save_debug(rule)
                     break
 
                 # Rule B: RC(j) · X(h) — move RC right past X (h in post-RC config)
@@ -570,10 +598,14 @@ class Leg:
                         # LR-II: h+1 == j is a removed position, so strands are
                         # non-adjacent in pre-RC config; RC falls by 1
                         seq[i:i + 2] = [('X', j + 1), ('X', j), ('X', j - 1), ('>', j + 1)]
+                        rule = 'B_LR2'
                     elif h < j:
                         seq[i], seq[i + 1] = ('X', h), ('>', j)
+                        rule = 'B_commute'
                     else:  # h >= j
                         seq[i], seq[i + 1] = ('X', h + 2), ('>', j)
+                        rule = 'B_commute'
+                    if debug_dir: _save_debug(rule)
                     break
 
                 # Rule C: RC(k) · LC(j) — move LC left past RC
@@ -584,28 +616,33 @@ class Leg:
                         seq[i], seq[i + 1] = ('<', j), ('>', k + 2)
                     else:
                         seq[i], seq[i + 1] = ('<', j + 2), ('>', k)
+                    if debug_dir: _save_debug('C')
                     break
 
                 # LC-LC far-commutation: LC(m)·LC(n) with n > m+1 → LC(n-2)·LC(m)
                 elif op_a == '<' and op_b == '<' and h_b > h_a + 1:
                     seq[i], seq[i + 1] = ('<', h_b - 2), ('<', h_a)
+                    if debug_dir: _save_debug('LC_LC_commute')
                     break
 
                 # Rule D: LC(k) · LC(k+1) — fix nested left cusps (R2 move)
                 elif op_a == '<' and op_b == '<' and h_b == h_a + 1:
                     k = h_a
                     seq[i:i + 2] = [('<', k), ('<', k + 2), ('X', k + 1), ('X', k)]
+                    if debug_dir: _save_debug('D_R2')
                     break
 
                 # RC-RC far-commutation: RC(n)·RC(m) with n > m+1 → RC(m)·RC(n-2)
                 elif op_a == '>' and op_b == '>' and h_a > h_b + 1:
                     seq[i], seq[i + 1] = ('>', h_b), ('>', h_a - 2)
+                    if debug_dir: _save_debug('RC_RC_commute')
                     break
 
                 # Rule F: RC(k+1) · RC(k) — fix nested right cusps (R2 move)
                 elif op_a == '>' and op_b == '>' and h_a == h_b + 1:
                     k = h_b
                     seq[i:i + 2] = [('X', k), ('X', k + 1), ('>', k), ('>', k)]
+                    if debug_dir: _save_debug('F_R2')
                     break
 
             else:
@@ -980,6 +1017,12 @@ class Leg:
             x = x_R
 
         return segments
+
+    def debug_tangle_to_braid(self, debug_dir: str) -> None:
+        """Save a picture after each step of the tangle→plat conversion to debug_dir."""
+        if not hasattr(self, 'tangle'):
+            raise AttributeError('No tangle stored on this Leg.')
+        Leg._tangle_to_braid(self.tangle, debug_dir=debug_dir)
 
     def draw(self, label_generators: bool = False, use_tangle: bool = False):
         """Plot the front projection of this Leg. Returns a matplotlib Figure."""
@@ -1592,20 +1635,22 @@ class DGA:
 
     def _dim_homology_z2(self, place: int, ld: List) -> int:
         """Dimension of Z/2 linearized homology at grading position place (1-indexed in _gens_spaces)."""
-        def nullity_f2(mat):
-            if not mat or not mat[0]:
-                return len(mat[0]) if mat else 0
-            return len(mat[0]) - _rank_f2(mat)
+        def nullity_f2(mat, ncols):
+            if not mat:
+                return ncols  # zero map into empty space; full domain is the kernel
+            if not mat[0]:
+                return 0
+            return ncols - _rank_f2(mat)
 
         gs = self._gens_spaces
         num = len(gs)
         if num == 1:
             return len(gs[0])
         if place == 1:
-            return nullity_f2(self._diff_matrix_f2(1, ld))
+            return nullity_f2(self._diff_matrix_f2(1, ld), len(gs[0]))
         if place == num:
             return len(gs[num - 1]) - _rank_f2(self._diff_matrix_f2(num - 1, ld))
-        return (nullity_f2(self._diff_matrix_f2(place, ld)) -
+        return (nullity_f2(self._diff_matrix_f2(place, ld), len(gs[place - 1])) -
                 _rank_f2(self._diff_matrix_f2(place - 1, ld)))
 
     def _dim_homology_zn(self, place: int, augmentation: 'Augmentation') -> int:
@@ -1618,10 +1663,12 @@ class DGA:
         def rank_zn(mat):
             return _rank_zn(mat, n)
 
-        def nullity_zn(mat):
-            if not mat or not mat[0]:
-                return len(mat[0]) if mat else 0
-            return len(mat[0]) - rank_zn(mat)
+        def nullity_zn(mat, ncols):
+            if not mat:
+                return ncols  # zero map into empty space; full domain is the kernel
+            if not mat[0]:
+                return 0
+            return ncols - rank_zn(mat)
 
         def diff_matrix_zn(which):
             domain = gs[which - 1]
@@ -1643,10 +1690,10 @@ class DGA:
         if num == 1:
             return len(gs[0])
         if place == 1:
-            return nullity_zn(diff_matrix_zn(1))
+            return nullity_zn(diff_matrix_zn(1), len(gs[0]))
         if place == num:
             return len(gs[num - 1]) - rank_zn(diff_matrix_zn(num - 1))
-        return nullity_zn(diff_matrix_zn(place)) - rank_zn(diff_matrix_zn(place - 1))
+        return nullity_zn(diff_matrix_zn(place), len(gs[place - 1])) - rank_zn(diff_matrix_zn(place - 1))
 
     def dim_homology(self, place: int, augmentation: 'Augmentation') -> int:
         """
