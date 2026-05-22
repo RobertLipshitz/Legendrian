@@ -299,8 +299,8 @@ class Leg:
 
     Visualization
     -------------
-    draw(label_generators)  returns matplotlib Figure
-    export_svg(filename)    writes SVG, returns filename
+    draw(label_generators, method, color)  returns matplotlib Figure
+    export_svg(filename)                   writes SVG, returns filename
     """
 
     def __init__(
@@ -557,9 +557,7 @@ class Leg:
             import matplotlib.pyplot as plt
             stub = object.__new__(Leg)
             stub.tangle = seq[:]
-            fig = stub.draw(use_tangle=True)
-            for line in fig.axes[0].get_lines():
-                line.set_color('black')
+            fig = stub.draw(method='tangle', color=False)
             fig.axes[0].set_title(f'Step {step}: {rule_name}\n{seq}', fontsize=7)
             path = os.path.join(debug_dir, f'step_{step:04d}_{rule_name}.png')
             fig.savefig(path, dpi=80, bbox_inches='tight')
@@ -1024,23 +1022,116 @@ class Leg:
             raise AttributeError('No tangle stored on this Leg.')
         Leg._tangle_to_braid(self.tangle, debug_dir=debug_dir)
 
-    def draw(self, label_generators: bool = False, use_tangle: bool = False):
-        """Plot the front projection of this Leg. Returns a matplotlib Figure."""
+    @staticmethod
+    def _trace_grid_components(X_perm, O_perm):
+        """Return list of (segs_h, segs_v) per link component for a grid diagram."""
+        n = len(X_perm)
+        x_row_to_col = [None] * n
+        for j in range(n):
+            x_row_to_col[X_perm[j]] = j
+        visited = [False] * n
+        components = []
+        for start in range(n):
+            if visited[start]:
+                continue
+            segs_h, segs_v = [], []
+            col = start
+            while not visited[col]:
+                visited[col] = True
+                xr, or_ = X_perm[col], O_perm[col]
+                segs_v.append((col, min(xr, or_), max(xr, or_)))
+                next_col = x_row_to_col[or_]
+                segs_h.append((or_, min(col, next_col), max(col, next_col)))
+                col = next_col
+            components.append((segs_h, segs_v))
+        return components
+
+    def draw(self, label_generators: bool = False,
+             method: str = 'plat', color: bool = False,
+             use_tangle: bool = False):
+        """
+        Plot the front projection of this Leg. Returns a matplotlib Figure.
+
+        Parameters
+        ----------
+        label_generators : bool
+            Label DGA generators (plat method only).
+        method : {'plat', 'tangle', 'grid'}
+            'plat'   — braid-plat diagram (default). Always available.
+            'tangle' — tangle-sequence diagram. Requires self.tangle
+                       (initialize from a tangle sequence or grid).
+            'grid'   — XO grid diagram. Requires self.grid
+                       (initialize from a grid diagram).
+        color : bool
+            If True, each strand/component is drawn in a distinct color.
+            If False (default), everything is drawn in black.
+        use_tangle : bool
+            Deprecated. Use method='tangle' instead.
+        """
         import matplotlib.pyplot as plt
         import numpy as np
 
+        # Backwards-compatibility shim
         if use_tangle:
+            method = 'tangle'
+
+        _cmap = plt.get_cmap('tab10')
+        _tab_colors = [_cmap(i) for i in range(10)]
+
+        def _strand_color(k):
+            return _tab_colors[k % 10] if color else 'black'
+
+        # ── Grid diagram ──────────────────────────────────────────────────────
+        if method == 'grid':
+            if not hasattr(self, 'grid'):
+                raise AttributeError(
+                    'This Leg has no stored grid diagram; '
+                    "initialize from a grid diagram to use method='grid'"
+                )
+            X_perm, O_perm = self.grid
+            n = len(X_perm)
+            fig, ax = plt.subplots(figsize=(max(3, n * 0.55), max(3, n * 0.55)))
+            for i in range(n + 1):
+                ax.axhline(i, color='lightgray', lw=0.4, zorder=0)
+                ax.axvline(i, color='lightgray', lw=0.4, zorder=0)
+            for ci, (segs_h, segs_v) in enumerate(
+                    Leg._trace_grid_components(X_perm, O_perm)):
+                c = _strand_color(ci)
+                for col, r0, r1 in segs_v:
+                    ax.plot([col + .5] * 2, [r0 + .5, r1 + .5],
+                            color=c, lw=2, zorder=1)
+                for row, c0, c1 in segs_h:
+                    ax.plot([c0 + .5, c1 + .5], [row + .5] * 2,
+                            color=c, lw=2, zorder=2)
+            mk = 'black' if color else 'black'
+            for j in range(n):
+                ax.plot(j + .5, X_perm[j] + .5, 'x',
+                        color=mk, ms=5, mew=1.5, zorder=3)
+                ax.plot(j + .5, O_perm[j] + .5, 'o',
+                        color=mk, ms=4, mew=1.2, fillstyle='none', zorder=3)
+            ax.set_xlim(0, n)
+            ax.set_ylim(0, n)
+            ax.set_aspect('equal')
+            name_str = getattr(self, 'name', '') or ''
+            ax.set_title(f'Grid diagram  {name_str}'.strip(), fontsize=9)
+            for s in ax.spines.values():
+                s.set_visible(False)
+            ax.tick_params(left=False, bottom=False,
+                           labelleft=False, labelbottom=False)
+            plt.tight_layout()
+            return fig
+
+        # ── Tangle diagram ────────────────────────────────────────────────────
+        if method == 'tangle':
             if not hasattr(self, 'tangle'):
                 raise AttributeError(
                     'This Leg has no stored tangle; '
-                    'initialize with a tangle sequence to use use_tangle=True'
+                    "initialize from a tangle sequence or grid to use method='tangle'"
                 )
             segments = self._trace_tangle()
             all_x = [pt[0] for seg in segments for pt in seg]
             all_y = [pt[1] for seg in segments for pt in seg]
             fig, ax = plt.subplots(figsize=(max(4, max(all_x) * 0.5), 3))
-            _cmap = plt.get_cmap('tab10')
-            colors = [_cmap(i) for i in range(10)]
             t = np.linspace(0, 1, 50)
             for k, seg in enumerate(segments):
                 px, py = [], []
@@ -1061,7 +1152,7 @@ class Leg:
                     else:
                         px.extend(bx.tolist())
                         py.extend(by.tolist())
-                ax.plot(px, py, color=colors[k % 10], linewidth=2,
+                ax.plot(px, py, color=_strand_color(k), linewidth=2,
                         solid_capstyle='round', solid_joinstyle='round')
             ax.yaxis.set_visible(False)
             ax.xaxis.set_visible(False)
@@ -1069,12 +1160,11 @@ class Leg:
             plt.tight_layout()
             return fig
 
+        # ── Plat diagram (default) ────────────────────────────────────────────
         b = self.braid
         strands = self._trace_braid()
         extra_w = 0.8 if label_generators else 0.0
         fig, ax = plt.subplots(figsize=(max(4, len(b) * 0.8) + extra_w, 3))
-        _cmap = plt.get_cmap('tab10')
-        colors = [_cmap(i) for i in range(10)]
         for k, strand in enumerate(strands):
             xs = np.array(range(1, len(strand) + 1), dtype=float)
             ys = np.array(strand, dtype=float)
@@ -1082,9 +1172,9 @@ class Leg:
             try:
                 from scipy.interpolate import make_interp_spline
                 spl = make_interp_spline(xs, ys, k=min(2, len(xs) - 1))
-                ax.plot(t_fine, spl(t_fine), color=colors[k % 10], linewidth=2)
+                ax.plot(t_fine, spl(t_fine), color=_strand_color(k), linewidth=2)
             except Exception:
-                ax.plot(xs, ys, color=colors[k % 10], linewidth=2)
+                ax.plot(xs, ys, color=_strand_color(k), linewidth=2)
         if label_generators:
             _bbox = dict(boxstyle='round,pad=0.15', facecolor='white',
                          edgecolor='gray', alpha=0.85)

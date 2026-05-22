@@ -133,11 +133,12 @@ Leg(([1, 0], [0, 1]))                 # from grid diagram (2-tuple of permutatio
 **Visualization:**
 
 ```python
-k.draw()                         # front projection (plat form); returns matplotlib Figure
-k.draw(label_generators=True)    # same, with generator labels
-k.draw(use_tangle=True)          # draw the tangle sequence instead of the plat
-                                 # (raises AttributeError if no tangle is stored)
-k.export_svg('knot.svg')         # writes SVG of the plat diagram, returns filename
+k.draw()                            # front projection (plat form); returns matplotlib Figure
+k.draw(label_generators=True)       # same, with generator labels
+k.draw(method='tangle')             # tangle-sequence diagram (requires stored tangle)
+k.draw(method='grid')               # XO grid diagram (requires stored grid)
+k.draw(color=True)                  # color each strand/component (default color=False is black)
+k.export_svg('knot.svg')            # writes SVG of the plat diagram, returns filename
 ```
 
 ### `DGA`

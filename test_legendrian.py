@@ -743,7 +743,37 @@ class TestTangleInput:
 
     # --- draw ---
 
-    def test_draw_use_tangle_returns_figure(self):
+    def test_draw_plat_returns_figure(self):
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        fig = Leg([2, 2, 2]).draw()
+        assert hasattr(fig, 'savefig')
+        plt.close(fig)
+
+    def test_draw_plat_color_true(self):
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        fig = Leg([2, 2, 2]).draw(color=True)
+        assert hasattr(fig, 'savefig')
+        plt.close(fig)
+
+    def test_draw_tangle_returns_figure(self):
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        t = [('<', 0), ('X', 0), ('>', 0)]
+        fig = Leg(t).draw(method='tangle')
+        assert hasattr(fig, 'savefig')
+        plt.close(fig)
+
+    def test_draw_tangle_no_tangle_raises(self):
+        with pytest.raises(AttributeError):
+            Leg([1]).draw(method='tangle')
+
+    def test_draw_tangle_use_tangle_compat(self):
+        """use_tangle=True is still accepted as a deprecated alias."""
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
@@ -752,9 +782,25 @@ class TestTangleInput:
         assert hasattr(fig, 'savefig')
         plt.close(fig)
 
-    def test_draw_use_tangle_no_tangle_raises(self):
+    def test_draw_grid_returns_figure(self):
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        fig = Leg(([1, 0], [0, 1])).draw(method='grid')
+        assert hasattr(fig, 'savefig')
+        plt.close(fig)
+
+    def test_draw_grid_no_grid_raises(self):
         with pytest.raises(AttributeError):
-            Leg([1]).draw(use_tangle=True)
+            Leg([2, 2, 2]).draw(method='grid')
+
+    def test_draw_grid_color_true(self):
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        fig = Leg(([1, 0], [0, 1])).draw(method='grid', color=True)
+        assert hasattr(fig, 'savefig')
+        plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
