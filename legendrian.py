@@ -1781,17 +1781,17 @@ class DGA:
                     return sorted(set(res))
 
                 if is_impossible(work):
-                    return [], [], [], []
+                    return None, None, None, None
                 c0, c1 = get_c0(work), get_c1(work)
                 while c0 or c1:
                     if set(c0) & set(c1):
-                        return [], [], [], []
+                        return None, None, None, None
                     work = trim(sub(rmv(work, c0), c1))
                     aQ_l = [x for x in aQ_l if x not in c0 and x not in c1]
                     a1_local = sorted(set(a1_local) | set(c1))
                     a0_l = sorted(set(a0_l) | set(c0))
                     if is_impossible(work):
-                        return [], [], [], []
+                        return None, None, None, None
                     c0, c1 = get_c0(work), get_c1(work)
                 return aQ_l, a1_local, a0_l, work
 
@@ -1840,8 +1840,10 @@ class DGA:
 
             if modulus == 2:
                 aQ, a1, a0, d_red = ac(d, grading_mod)
-                if not aQ and not a1:
+                if aQ is None:
                     raw = []
+                elif not aQ and not a1:
+                    raw = [[]]
                 else:
                     raw = []
                     for sz in range(len(aQ) + 1):

@@ -286,6 +286,15 @@ class TestAugmentations:
         assert augm.dga is d
         assert augm.dga.leg is k
 
+    def test_trivial_augmentation_when_no_grade_zero_gens(self):
+        # Hopf link: all generators in degree ±1; none in degree 0.
+        # The trivial augmentation (all generators → 0) must still be found.
+        hopf = Leg([2, 2], maslov=[0, 0])
+        assert not any(x == 0 for x in hopf.grading), "precondition: no grade-0 gens"
+        augs = hopf.augmentations()
+        assert len(augs) == 1
+        assert augs[0].data == []
+
 
 # ---------------------------------------------------------------------------
 # Section 4: Linearized homology
