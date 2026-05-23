@@ -128,9 +128,9 @@ The optional `maslov` parameter is a list of integers, one per link component (o
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `dga(ring=None)` | `DGA` | DGA over `ring`; defaults to `DEFAULT_GROUND_RING` (Z/2). Cached per ring. |
-| `augmentations(grading_mod, modulus)` | `List[Augmentation]` | Shorthand for `dga(Z/modulus).augmentations(grading_mod)` |
-| `all_lin_hom(grading_mod, modulus, format)` | `List[Dict[int,int]]` or `List[str]` | Distinct Poincaré-Chekanov polynomials; `format=True` returns strings |
+| `dga(ring=None)` | `DGA` | DGA over `ring`; defaults to `DEFAULT_GROUND_RING` (Z/2). Cached per ring. Links supported over Z/2 only. |
+| `augmentations(grading_mod, modulus)` | `List[Augmentation]` | Shorthand for `dga(Z/modulus).augmentations(grading_mod)`. Links over Z/2 require `grading_mod \| 2·rot_c`. |
+| `all_lin_hom(grading_mod, modulus, format)` | `List[Dict[int,int]]` or `List[str]` | Distinct Poincaré-Chekanov polynomials; `format=True` returns strings. Links over Z/2 require same grading condition. |
 | `rulings(grading_mod)` | `List[List[int]]` | All graded rulings; cached per `grading_mod` |
 | `format_ruling_invariant(grading_mod=0)` | `str` | `ruling_invariant` as a polynomial string in z |
 

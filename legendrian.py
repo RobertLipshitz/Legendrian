@@ -299,6 +299,10 @@ class Leg:
     lin_hom(...)        shorthand for self.dga(Z/modulus).lin_hom(...)
     rulings(grading_mod) cached per grading_mod
 
+    Link support: differential, augmentations, and lin_hom work for links over
+    Z/2 when maslov is set and grading_mod | 2*rot_c for every component.
+    Z[λ] / Z/n links are not yet supported (future work).
+
     Visualization
     -------------
     draw(label_generators, method, color)  returns matplotlib Figure
@@ -1569,12 +1573,18 @@ class DGA:
 
     @property
     def differential(self):
-        """The DGA differential, computed once and cached. Format depends on self.ring."""
+        """
+        The DGA differential, computed once and cached. Format depends on self.ring.
+        Links are supported over Z/2 only; Z[λ] / Z/n raise ValueError for links.
+        """
         if self._differential is not None:
             return self._differential
 
-        if self.leg.num_components != 1:
-            raise ValueError("the DGA differential is only defined for knots, not links")
+        if self.leg.num_components != 1 and self.ring != GroundRing.Z2:
+            raise ValueError(
+                "DGA differential over Z[λ] / Z/n is not yet implemented for links; "
+                "use GroundRing.Z2"
+            )
 
         b = self.leg.braid
 
@@ -1690,6 +1700,8 @@ class DGA:
         Cached per grading_mod.
 
         grading_mod: 0 = Z-graded, 1 = ungraded, n >= 2 = Z/n-graded.
+        Links are supported over Z/2 only.
+        Requires grading_mod | 2*rot_c for every component (same condition as rulings).
         Not supported for Z[λ] (use Z/2 or Z/p instead).
         """
         if self.ring == GroundRing.ZLAMBDA:
@@ -1697,9 +1709,19 @@ class DGA:
                 'Augmentations are not computed directly over Z[λ]. '
                 'Use leg.dga(GroundRing.Z2) or leg.dga(GroundRing.Zn(p)).'
             )
+        _rots = self.leg.rot if isinstance(self.leg.rot, tuple) else (self.leg.rot,)
+        if grading_mod == 0:
+            if any(r != 0 for r in _rots):
+                raise ValueError(
+                    f"Z-graded augmentations require rot = 0 for each component; "
+                    f"got rot={self.leg.rot}"
+                )
+        elif any(2 * r % grading_mod != 0 for r in _rots):
+            raise ValueError(
+                f"Z/{grading_mod}-graded augmentations require grading_mod | 2*rot_c "
+                f"for each component; got rot={self.leg.rot}"
+            )
         if grading_mod not in self._augmentations_cache:
-            if self.leg.num_components != 1:
-                raise ValueError("augmentations are only defined for knots, not links")
             gr = self.leg.grading
             r = self.leg.rot
             d = self.differential
@@ -1731,7 +1753,7 @@ class DGA:
             def ac(dd, grading_mod):
                 a1_local: List[int] = []
                 g = gr[:]
-                if grading_mod == 0 and r != 0:
+                if grading_mod == 0 and isinstance(r, int) and r != 0:
                     g = [x % (2 * r) for x in g]
 
                 def is_active(x):
@@ -1782,7 +1804,7 @@ class DGA:
                 return True
 
             def aug_zn(zn_d, grading_mod, n):
-                g_eff = [x % (2 * r) for x in gr] if (grading_mod == 0 and r != 0) else gr[:]
+                g_eff = [x % (2 * r) for x in gr] if (grading_mod == 0 and isinstance(r, int) and r != 0) else gr[:]
 
                 def is_grade0(x):
                     return x == 0 if grading_mod == 0 else x % grading_mod == 0

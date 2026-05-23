@@ -71,13 +71,28 @@ class TestNumComponents:
                 assert Leg(b).num_components == 1, \
                     f"Expected knot, got link for {name}: {b}"
 
-    def test_differential_raises_for_link(self):
-        with pytest.raises(ValueError):
-            _ = Leg(LINK_2).dga().differential
+    def test_z2_differential_works_for_link(self):
+        # Z/2 differential is purely combinatorial and link-agnostic
+        d = Leg(LINK_2, maslov=[0, 0]).dga().differential
+        assert isinstance(d, list)
 
-    def test_augmentations_raises_for_link(self):
+    def test_z2_differential_d_squared_zero_for_link(self):
+        assert Leg(LINK_2, maslov=[0, 0]).dga().check_d_squared()
+
+    def test_zn_differential_raises_for_link(self):
+        # Z/n (and Z[λ]) differential not yet implemented for links
         with pytest.raises(ValueError):
-            Leg(LINK_2).augmentations()
+            _ = Leg(LINK_2, maslov=[0, 0]).dga('Z3').differential
+
+    def test_augmentations_z2_graded_works_for_link(self):
+        # grading_mod=2: 2 | 2*rot_c = 2*1 always → valid for LINK_2
+        result = Leg(LINK_2, maslov=[0, 0]).dga().augmentations(grading_mod=2)
+        assert isinstance(result, list)
+
+    def test_augmentations_raises_for_link_bad_grading(self):
+        # grading_mod=0 (Z-graded) requires rot_c=0; LINK_2 has rot=(1,1)
+        with pytest.raises(ValueError):
+            Leg(LINK_2, maslov=[0, 0]).augmentations()
 
     def test_zlambda_diff_raises_for_link(self):
         with pytest.raises(ValueError):
@@ -1207,3 +1222,65 @@ class TestPolynomialRealityCheck:
     def test_r1_ruling_polynomial(self, rep, expected_r2, expected_r1):
         k = Leg(rep)
         assert k.ruling_invariant(grading_mod=1) == expected_r1
+
+
+# ---------------------------------------------------------------------------
+# Section 16: Link grid atlas — structural and DGA sanity checks
+#
+# Tests that do not require pre-computed invariant values.  Pre-computed
+# tb, rot, and ruling data will be added in a later pass.
+#
+# Test strategy
+# -------------
+# 1. nc == 2         — every entry in LINK_GRID_ATLAS should be a 2-component link
+# 2. d² = 0          — Z/2 DGA correctness; maslov not needed (differential is grade-agnostic)
+# 3. rot is a tuple  — regression on multi-component rot
+# 4. Z/2 rulings     — rulings(grading_mod=2) never raises (2 | 2r for any r)
+# 5. Z graded guard  — rulings(grading_mod=0) raises iff any rot_c ≠ 0
+# ---------------------------------------------------------------------------
+
+from auxiliary_data.link_grid_atlas import LINK_GRID_ATLAS as _LGA
+
+
+def _build_link_cases():
+    rows, ids = [], []
+    for name in sorted(_LGA.keys()):
+        for i, grid in enumerate(_LGA[name]):
+            rows.append((name, i, grid))
+            ids.append(f"{name}.{i}")
+    return rows, ids
+
+
+_LINK_CASES, _LINK_IDS = _build_link_cases()
+
+
+class TestLinkGridAtlas:
+    """Structural and DGA sanity checks for every link in LINK_GRID_ATLAS."""
+
+    @pytest.mark.parametrize("name,i,grid", _LINK_CASES, ids=_LINK_IDS)
+    def test_nc(self, name, i, grid):
+        assert Leg(grid).num_components == 2
+
+    @pytest.mark.parametrize("name,i,grid", _LINK_CASES, ids=_LINK_IDS)
+    def test_d_squared_zero(self, name, i, grid):
+        # Z/2 differential is grade-agnostic; no maslov needed
+        assert Leg(grid).dga().check_d_squared()
+
+    @pytest.mark.parametrize("name,i,grid", _LINK_CASES, ids=_LINK_IDS)
+    def test_rot_is_tuple(self, name, i, grid):
+        assert isinstance(Leg(grid).rot, tuple)
+
+    @pytest.mark.parametrize("name,i,grid", _LINK_CASES, ids=_LINK_IDS)
+    def test_z2_rulings_works(self, name, i, grid):
+        # grading_mod=2: 2 | 2r_c for every integer r_c, so always valid
+        result = Leg(grid, maslov=[0, 0]).rulings(grading_mod=2)
+        assert isinstance(result, list)
+
+    @pytest.mark.parametrize("name,i,grid", _LINK_CASES, ids=_LINK_IDS)
+    def test_z_graded_rulings_guard(self, name, i, grid):
+        leg = Leg(grid, maslov=[0, 0])
+        if any(r != 0 for r in leg.rot):
+            with pytest.raises(ValueError):
+                leg.rulings(grading_mod=0)
+        else:
+            assert isinstance(leg.rulings(grading_mod=0), list)
