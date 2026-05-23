@@ -284,10 +284,12 @@ class Leg:
     Classical invariants  (computed once, cached as properties)
     -----------------------------------------------------------
     num_components     int
+    strand_potentials  List[int]   Maslov potential, one value per braid strand
     grading            List[int]
     tb                 int   (Thurston-Bennequin number)
-    rot                int   (rotation number)
-    ruling_invariant(grading_mod=0)  Dict[int, int]  (ruling polynomial in z)
+    rot                int for knots; Tuple[int,...] for links (one per component)
+    ruling_invariant(grading_mod=0)  Dict[int, int]  (ruling polynomial in z;
+                       works for links when maslov is specified)
 
     DGA and augmentations
     ---------------------
@@ -307,6 +309,7 @@ class Leg:
         self,
         input: Union[List[int], List[tuple], str, tuple],
         name: Optional[str] = None,
+        maslov: Optional[List[int]] = None,
     ) -> None:
         _is_grid = (
             isinstance(input, tuple) and len(input) == 2
@@ -373,6 +376,7 @@ class Leg:
             self.num_cusps = max(self.braid) // 2 + 1
         self._dga_cache: Dict[GroundRing, DGA] = {}
         self._rulings_cache: Dict[int, List[List[int]]] = {}
+        self._maslov_seeds: Optional[List[int]] = maslov
 
     def __repr__(self) -> str:
         return f'Leg({self.name!r})'
@@ -700,6 +704,106 @@ class Leg:
             union(at_pos[j], at_pos[j + 1])
         return len({find(i) for i in range(1, strand_num + 1)})
 
+    @cached_property
+    def _comp_and_perm(self) -> Tuple[List[int], List[int]]:
+        """
+        Returns (comp_of, final_perm) where:
+          comp_of[s]    = component index of 0-indexed strand s (ordered by first
+                          appearance scanning strands 0 … 2p-1)
+          final_perm[i] = strand at 0-indexed braid position i after the full braid
+        """
+        p = self.num_cusps
+        n = 2 * p
+
+        final_perm = list(range(n))
+        for gen in self.braid:
+            final_perm[gen - 1], final_perm[gen] = final_perm[gen], final_perm[gen - 1]
+
+        parent = list(range(n))
+
+        def _find(x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def _union(x: int, y: int) -> None:
+            px, py = _find(x), _find(y)
+            if px != py:
+                parent[px] = py
+
+        for j in range(p):
+            _union(2 * j, 2 * j + 1)
+        for j in range(p):
+            _union(final_perm[2 * j], final_perm[2 * j + 1])
+
+        root_to_comp: Dict[int, int] = {}
+        comp_of = [0] * n
+        for s in range(n):
+            r = _find(s)
+            if r not in root_to_comp:
+                root_to_comp[r] = len(root_to_comp)
+            comp_of[s] = root_to_comp[r]
+
+        return comp_of, final_perm
+
+    @cached_property
+    def strand_potentials(self) -> List[int]:
+        """
+        Maslov potential on braid strands (0-indexed, length 2*num_cusps).
+
+        strand_potentials[s] is the Maslov potential of strand s.  Strands are
+        numbered 0 … 2p-1.  Left cusp j (j=0…p-1) connects upper strand 2j and
+        lower strand 2j+1; right cusp j connects final_perm[2j] (upper) and
+        final_perm[2j+1] (lower).  At every cusp: μ[upper] = μ[lower] + 1.
+
+        Seeds (one integer per component, ordered by first appearance from the
+        top of the diagram) are taken from the maslov constructor argument; if
+        omitted, all seeds default to 0.  The seed for component i is the
+        Maslov potential of the lower strand of the topmost left cusp in that
+        component.
+        """
+        p = self.num_cusps
+        n = 2 * p
+        seeds = self._maslov_seeds if self._maslov_seeds is not None else [0] * self.num_components
+        if len(seeds) != self.num_components:
+            raise ValueError(
+                f'maslov must have length num_components={self.num_components}, '
+                f'got {len(seeds)}'
+            )
+
+        comp_of, final_perm = self._comp_and_perm
+
+        # Seed each component from the topmost left cusp in that component.
+        mu: List[Optional[int]] = [None] * n
+        seeded: set = set()
+        for j in range(p):
+            c = comp_of[2 * j]
+            if c not in seeded:
+                mu[2 * j + 1] = seeds[c]        # lower strand = seed
+                mu[2 * j] = seeds[c] + 1        # upper strand = seed + 1
+                seeded.add(c)
+
+        # BFS: propagate through cusp constraints until all strands are assigned.
+        changed = True
+        while changed:
+            changed = False
+            for j in range(p):
+                # Left cusp j: upper = 2j, lower = 2j+1
+                up, lo = 2 * j, 2 * j + 1
+                if mu[up] is None and mu[lo] is not None:
+                    mu[up] = mu[lo] + 1;  changed = True
+                elif mu[lo] is None and mu[up] is not None:
+                    mu[lo] = mu[up] - 1;  changed = True
+                # Right cusp j: upper = final_perm[2j], lower = final_perm[2j+1]
+                up, lo = final_perm[2 * j], final_perm[2 * j + 1]
+                if mu[up] is None and mu[lo] is not None:
+                    mu[up] = mu[lo] + 1;  changed = True
+                elif mu[lo] is None and mu[up] is not None:
+                    mu[lo] = mu[up] - 1;  changed = True
+
+        return mu  # type: ignore[return-value]  # all entries are filled
+
     @staticmethod
     def _trugrad(b: List[int], i: int) -> int:
         """Maslov grading of crossing i (1-indexed) in braid b."""
@@ -734,8 +838,14 @@ class Leg:
 
     @cached_property
     def grading(self) -> List[int]:
-        b = self.braid
-        gr = [self._trugrad(b, i) for i in range(1, len(b) + 1)]
+        mu = self.strand_potentials
+        perm = list(range(2 * self.num_cusps))
+        gr = []
+        for gen in self.braid:
+            s_upper = perm[gen - 1]
+            s_lower = perm[gen]
+            gr.append(mu[s_upper] - mu[s_lower])
+            perm[gen - 1], perm[gen] = perm[gen], perm[gen - 1]
         gr.extend([1] * self.num_cusps)
         return gr
 
@@ -744,14 +854,39 @@ class Leg:
         return sum(1 if x % 2 == 0 else -1 for x in self.grading)
 
     @cached_property
-    def rot(self) -> int:
-        b = self.braid
-        if not b:
-            return 0
-        m = max(b)
-        h = m + 2 if m % 2 == 0 else m + 1
-        backend = list(reversed([h - x for x in b]))
-        return abs((self._trugrad(b, 1) + self._trugrad(backend, len(b))) // 2)
+    def rot(self) -> Union[int, Tuple[int, ...]]:
+        """
+        Rotation number.
+
+        For a knot (num_components == 1): returns an int.
+        For a link: returns a tuple of ints, one per component, in the same
+        order as the maslov seeds (components ordered by first appearance from
+        the top of the front diagram).
+
+        Each value is non-negative (the sign depends on an orientation choice
+        that is not fixed by the plat-form data).
+        """
+        if self.num_components == 1:
+            b = self.braid
+            if not b:
+                return 0
+            m = max(b)
+            h = m + 2 if m % 2 == 0 else m + 1
+            backend = list(reversed([h - x for x in b]))
+            return abs((self._trugrad(b, 1) + self._trugrad(backend, len(b))) // 2)
+
+        # For each component, the rotation number is half the total "inconsistency"
+        # of the Maslov potential at the right cusps.  At right cusp j, the expected
+        # potential difference is +1 (μ[upper] = μ[lower] + 1); the actual difference
+        # may differ by 2r_c (twice the component's rotation number).
+        mu = self.strand_potentials
+        comp_of, final_perm = self._comp_and_perm
+        totals = [0] * self.num_components
+        for j in range(self.num_cusps):
+            up = final_perm[2 * j]
+            lo = final_perm[2 * j + 1]
+            totals[comp_of[up]] += mu[up] - mu[lo] - 1
+        return tuple(abs(t // 2) for t in totals)
 
     def ruling_invariant(self, grading_mod: int = 0) -> Dict[int, int]:
         "Ruling polynomial as a dictionary with keys the degree and values the coefficient"
@@ -857,10 +992,21 @@ class Leg:
         All graded rulings, computed with meet-in-the-middle.
         Cached per grading_mod (verbose output is not cached).
         grading_mod: 0 = Z-graded, 1 = ungraded, n >= 2 = Z/n-graded.
+        Requires grading_mod | 2*rot_c for every component c (grading_mod=0
+        requires rot_c = 0); raises ValueError otherwise.
         """
+        rots = self.rot if isinstance(self.rot, tuple) else (self.rot,)
+        if grading_mod == 0:
+            if any(r != 0 for r in rots):
+                raise ValueError(
+                    f"Z-graded rulings require rot = 0 for each component; got rot={self.rot}"
+                )
+        elif any(2 * r % grading_mod != 0 for r in rots):
+            raise ValueError(
+                f"Z/{grading_mod}-graded rulings require grading_mod | 2*rot_c "
+                f"for each component; got rot={self.rot}"
+            )
         if grading_mod not in self._rulings_cache:
-            if self.num_components != 1:
-                raise ValueError("rulings are only defined for knots, not links")
             b = self.braid
             n = len(b)
             cut = n // 2

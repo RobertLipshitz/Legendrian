@@ -83,13 +83,13 @@ class TestNumComponents:
         with pytest.raises(ValueError):
             _ = Leg(LINK_2).dga('Zlambda').differential
 
-    def test_rulings_raises_for_link(self):
-        with pytest.raises(ValueError):
-            Leg(LINK_2).rulings()
+    def test_rulings_works_for_link(self):
+        result = Leg(LINK_2, maslov=[0, 0]).rulings(grading_mod=1)
+        assert isinstance(result, list)
 
-    def test_rulings_graded_raises_for_link(self):
-        with pytest.raises(ValueError):
-            Leg(LINK_2).rulings(grading_mod=2)
+    def test_rulings_graded_works_for_link(self):
+        result = Leg(LINK_2, maslov=[0, 0]).rulings(grading_mod=2)
+        assert isinstance(result, list)
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +132,57 @@ class TestClassicalInvariants:
         k = Leg(TREFOIL)
         assert k.grading is k.grading
         assert k.tb == k.tb  # value stable across accesses
+
+    def test_rot_for_link_is_tuple(self):
+        assert isinstance(Leg(LINK_2).rot, tuple)
+
+    def test_rot_for_link_values(self):
+        assert Leg(LINK_2, maslov=[0, 0]).rot == (1, 1)
+
+
+# ---------------------------------------------------------------------------
+# Section 1b: Maslov potentials and link grading
+# ---------------------------------------------------------------------------
+
+class TestMaslovPotentials:
+
+    def test_trefoil_strand_potentials_default(self):
+        # Left cusps give mu[0]=mu[1]+1 and mu[2]=mu[3]+1; right cusp
+        # propagates mu[2]=mu[1] and mu[3]=mu[0]-2.  With seed 0: [1,0,0,-1].
+        assert Leg(TREFOIL).strand_potentials == [1, 0, 0, -1]
+
+    def test_trefoil_strand_potentials_shifted(self):
+        assert Leg(TREFOIL, maslov=[5]).strand_potentials == [6, 5, 5, 4]
+
+    def test_trefoil_grading_unchanged_by_maslov_shift(self):
+        # Shifting the Maslov seed shifts all generator gradings uniformly;
+        # for a knot the crossing grading is a *difference*, so it's unchanged.
+        assert Leg(TREFOIL, maslov=[5]).grading == Leg(TREFOIL).grading
+
+    def test_link_strand_potentials(self):
+        # LINK_2 = [1,3]: two disjoint components {strands 0,1} and {strands 2,3}.
+        # Left cusp constraints only: mu=[1,0,1,0].
+        assert Leg(LINK_2, maslov=[0, 0]).strand_potentials == [1, 0, 1, 0]
+
+    def test_link_grading(self):
+        assert Leg(LINK_2, maslov=[0, 0]).grading == [1, 1, 1, 1]
+
+    def test_link_grading_component_shift(self):
+        # Shifting component 1's seed by k shifts that component's crossing by k.
+        g0 = Leg(LINK_2, maslov=[0, 0]).grading
+        g1 = Leg(LINK_2, maslov=[0, 3]).grading
+        # Crossing 0 (gen=1) is on component 0 — unchanged.
+        assert g1[0] == g0[0]
+        # Crossing 1 (gen=3) is on component 1 — unchanged (difference of same-component potentials).
+        assert g1[1] == g0[1]
+
+    def test_maslov_wrong_length_raises(self):
+        with pytest.raises(ValueError):
+            Leg(TREFOIL, maslov=[0, 0]).strand_potentials  # knot needs length 1
+
+    def test_maslov_wrong_length_link_raises(self):
+        with pytest.raises(ValueError):
+            Leg(LINK_2, maslov=[0]).strand_potentials  # link needs length 2
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +383,20 @@ class TestRulings:
     def test_rulings_are_cached(self):
         k = Leg(TREFOIL)
         assert k.rulings() is k.rulings()
+
+    def test_rulings_z_graded_raises_for_nonzero_rot_link(self):
+        # LINK_2 has rot=(1,1); Z-graded rulings require rot=0
+        with pytest.raises(ValueError):
+            Leg(LINK_2, maslov=[0, 0]).rulings(grading_mod=0)
+
+    def test_rulings_incompatible_mod_raises(self):
+        # grading_mod=3 requires 3 | 2*rot_c; rot=(1,1) gives 2*1=2, 3∤2
+        with pytest.raises(ValueError):
+            Leg(LINK_2, maslov=[0, 0]).rulings(grading_mod=3)
+
+    def test_ruling_invariant_propagates_guard(self):
+        with pytest.raises(ValueError):
+            Leg(LINK_2, maslov=[0, 0]).ruling_invariant(grading_mod=0)
 
 
 # ---------------------------------------------------------------------------
@@ -695,8 +760,9 @@ class TestTangleInput:
     def test_nonplat_tb_matches_ref(self):
         assert Leg(_TANGLE_NON_PLAT).tb == Leg([3, 3]).tb
 
-    def test_nonplat_rot_matches_ref(self):
-        assert Leg(_TANGLE_NON_PLAT).rot == Leg([3, 3]).rot
+    def test_nonplat_rot_is_tuple(self):
+        # _TANGLE_NON_PLAT converts to braid [3,3], a 2-component link
+        assert isinstance(Leg(_TANGLE_NON_PLAT).rot, tuple)
 
     # --- DGA ---
 

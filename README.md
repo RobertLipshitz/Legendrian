@@ -108,17 +108,21 @@ Leg('mK3_1.0')                        # also works
 Leg('mK5_2.0')                        # first of two reps, 0-indexed
 Leg([('<', 0), ('X', 0), ('>', 0)])   # from tangle decomposition
 Leg(([1, 0], [0, 1]))                 # from grid diagram (2-tuple of permutations)
+Leg([1, 3], maslov=[0, 0])            # 2-component link with explicit Maslov potential
 ```
+
+The optional `maslov` parameter is a list of integers, one per link component (ordered by first appearance from the top of the front diagram). Each value sets the Maslov potential of the lower strand of the topmost left cusp on that component. For knots the default is `[0]`; for links it is `[0, 0, …]`. Grading, tb, and ruling invariants for links require a Maslov potential.
 
 **Classical invariants** (computed once, cached):
 
 | Property | Type | Description |
 |----------|------|-------------|
 | `num_components` | `int` | Number of link components |
+| `strand_potentials` | `List[int]` | Maslov potential on braid strands (length `2 * num_cusps`) |
 | `grading` | `List[int]` | Maslov grading of generators |
 | `tb` | `int` | Thurston-Bennequin number |
-| `rot` | `int` | Rotation number |
-| `ruling_invariant(grading_mod=0)` | `Dict[int, int]` | Ruling polynomial coefficients |
+| `rot` | `int` (knots) / `Tuple[int,...]` (links) | Rotation number; returns `int` for knots, a per-component tuple for links |
+| `ruling_invariant(grading_mod=0)` | `Dict[int, int]` | Ruling polynomial; requires `grading_mod \| 2·rot_c` for each component (`grading_mod=0` needs `rot_c=0`; `grading_mod=1,2` always valid) |
 
 **DGA and augmentations:**
 
@@ -303,6 +307,28 @@ k = Leg([2, 2, 2])
 d = k.dga('Zlambda')
 d.print_differential()
 print(d.check_d_squared())
+```
+
+### Legendrian link with Maslov potential
+
+```python
+from legendrian import Leg
+
+# 2-component link from the link atlas; maslov sets one potential per component
+lnk = Leg('L2a1.0', maslov=[0, 0])
+print(lnk.num_components)          # 2
+print(lnk.strand_potentials)       # Maslov potential on each braid strand
+print(lnk.grading)                 # generator gradings (depends on maslov choice)
+print(lnk.tb)                      # total writhe
+print(lnk.rot)                     # tuple of per-component rotation numbers
+print(lnk.ruling_invariant())      # graded ruling polynomial
+```
+
+Shifting a component's seed by `k` shifts that component's crossing gradings by `k`:
+
+```python
+lnk0 = Leg('L2a1.0', maslov=[0, 0])
+lnk1 = Leg('L2a1.0', maslov=[0, 2])   # component 1 shifted by 2
 ```
 
 ### Multiple Legendrian reps
