@@ -94,9 +94,9 @@ class TestNumComponents:
         with pytest.raises(ValueError):
             Leg(LINK_2, maslov=[0, 0]).augmentations()
 
-    def test_zlambda_diff_raises_for_link(self):
-        with pytest.raises(ValueError):
-            _ = Leg(LINK_2).dga('Zlambda').differential
+    def test_zlambda_diff_works_for_link(self):
+        d = Leg(LINK_2, maslov=[0, 0]).dga('Zlambda').differential
+        assert isinstance(d, list) and len(d) > 0
 
     def test_rulings_works_for_link(self):
         result = Leg(LINK_2, maslov=[0, 0]).rulings(grading_mod=1)
@@ -352,8 +352,29 @@ class TestZDiff:
 
     def test_trefoil_zdiff_cusp_has_lambda(self):
         zd = Leg(TREFOIL).dga('Zlambda').differential
-        has_lambda = any(kind == 'lambda' for (_, kind) in zd[-1])
+        # knot has one component (c=0), so kind is ('lambda', 0)
+        has_lambda = any(isinstance(kind, tuple) and kind[0] == 'lambda' for (_, kind) in zd[-1])
         assert has_lambda
+
+    def test_trefoil_zdiff_check_d_squared(self):
+        assert Leg(TREFOIL).dga('Zlambda').check_d_squared()
+
+    def test_link_zlambda_diff_works(self):
+        d = Leg(LINK_2, maslov=[0, 0]).dga('Zlambda').differential
+        assert isinstance(d, list) and len(d) > 0
+
+    def test_link_zlambda_two_lambda_kinds(self):
+        d = Leg(LINK_2, maslov=[0, 0]).dga('Zlambda').differential
+        kinds = {kind for entry in d for (_, kind) in entry}
+        assert ('lambda', 0) in kinds
+        assert ('lambda', 1) in kinds
+
+    def test_link_zlambda_check_d_squared(self):
+        assert Leg(LINK_2, maslov=[0, 0]).dga('Zlambda').check_d_squared()
+
+    def test_zn_still_raises_for_link(self):
+        with pytest.raises(ValueError):
+            _ = Leg(LINK_2, maslov=[0, 0]).dga('Z3').differential
 
 
 # ---------------------------------------------------------------------------
@@ -1293,3 +1314,7 @@ class TestLinkGridAtlas:
                 leg.rulings(grading_mod=0)
         else:
             assert isinstance(leg.rulings(grading_mod=0), list)
+
+    @pytest.mark.parametrize("name,i,grid", _LINK_CASES, ids=_LINK_IDS)
+    def test_zlambda_d_squared_zero(self, name, i, grid):
+        assert Leg(grid, maslov=[0, 0]).dga('Zlambda').check_d_squared()

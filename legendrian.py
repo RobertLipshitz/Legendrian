@@ -299,9 +299,10 @@ class Leg:
     lin_hom(...)        shorthand for self.dga(Z/modulus).lin_hom(...)
     rulings(grading_mod) cached per grading_mod
 
-    Link support: differential, augmentations, and lin_hom work for links over
-    Z/2 when maslov is set and grading_mod | 2*rot_c for every component.
-    Z[λ] / Z/n links are not yet supported (future work).
+    Link support: differential works for links over Z/2 and Z[λ₁,…,λₗ] (one
+    variable per component, basepoint at the last right cusp of each component).
+    Augmentations and lin_hom work for links over Z/2 when maslov is set and
+    grading_mod | 2*rot_c for every component. Z/n links are deferred.
 
     Visualization
     -------------
@@ -1505,8 +1506,7 @@ class DGA:
             if not b:
                 return []
             p = self.leg.num_cusps
-            gr_b = [Leg._trugrad(b, i) for i in range(1, len(b) + 1)]
-            gr_b.extend([1] * p)
+            gr_b = self.leg.grading  # len = len(b) + p; correct for multi-component links
             bext = b + list(range(1, 2 * p, 2))
             n = len(bext)
 
@@ -1549,8 +1549,14 @@ class DGA:
                         lbe[i][j].append((path, sign))
 
             bd = [None] + [glue_lists_enhanced(ub[i], lbe[i]) for i in range(1, n + 1)]
+            comp_of, final_perm = self.leg._comp_and_perm
+            basepoint: Dict[int, int] = {}  # comp_index -> 0-indexed right cusp j
+            for j in range(p):
+                basepoint[comp_of[final_perm[2 * j]]] = j  # last right cusp per component
             for i in range(n - p + 1, n + 1):
-                coeff = 'lambda' if i == n else 1
+                j = i - (n - p + 1)  # 0-indexed right cusp (1-indexed k = j+1 in _z_diff terms)
+                c = comp_of[final_perm[2 * j]]
+                coeff = ('lambda', c) if j == basepoint[c] else 1
                 entry = bd[i]
                 assert entry is not None
                 bd[i] = [([], coeff)] + entry
@@ -1562,8 +1568,8 @@ class DGA:
             assert terms is not None
             for word, coeff in terms:
                 key_word = tuple(word)
-                if coeff == 'lambda':
-                    k = (key_word, 'lambda')
+                if isinstance(coeff, tuple):  # ('lambda', c)
+                    k = (key_word, coeff)
                     poly[k] = poly.get(k, 0) + 1
                 else:
                     k = (key_word, 'int')
@@ -1575,15 +1581,19 @@ class DGA:
     def differential(self):
         """
         The DGA differential, computed once and cached. Format depends on self.ring.
-        Links are supported over Z/2 only; Z[λ] / Z/n raise ValueError for links.
+
+        Links are supported over Z/2 and Z[λ₁,…,λₗ] (ZLAMBDA). For ZLAMBDA the
+        returned list of dicts uses kind ('lambda', c) (0-indexed component c) for
+        the basepoint cusp of each component; 'int' terms are unchanged. Z/n raises
+        ValueError for links (requires searching λ_c values over (Z/n)^× — deferred).
         """
         if self._differential is not None:
             return self._differential
 
-        if self.leg.num_components != 1 and self.ring != GroundRing.Z2:
+        if self.leg.num_components != 1 and self.ring not in (GroundRing.Z2, GroundRing.ZLAMBDA):
             raise ValueError(
-                "DGA differential over Z[λ] / Z/n is not yet implemented for links; "
-                "use GroundRing.Z2"
+                "DGA differential over Z/n is not yet implemented for links; "
+                "use GroundRing.Z2 or GroundRing.ZLAMBDA."
             )
 
         b = self.leg.braid
@@ -1669,8 +1679,11 @@ class DGA:
             gr = self.leg.grading
 
             def to_triples(poly_dict):
-                return [(word, 1 if kind == 'lambda' else 0, coeff)
-                        for (word, kind), coeff in poly_dict.items()]
+                result = []
+                for (word, kind), coeff in poly_dict.items():
+                    lam = frozenset({kind[1]}) if isinstance(kind, tuple) else frozenset()
+                    result.append((word, lam, coeff))
+                return result
 
             d_triples = [to_triples(poly) for poly in d]
             for triples in d_triples:
@@ -1684,7 +1697,7 @@ class DGA:
                         )
                         for d_word, d_lam, d_coeff in d_triples[gen - 1]:
                             new_word = prefix + d_word + suffix
-                            key = (new_word, lam + d_lam)
+                            key = (new_word, lam | d_lam)
                             count[key] = count.get(key, 0) + coeff * right_sign * d_coeff
                 if any(v != 0 for v in count.values()):
                     return False
@@ -2115,8 +2128,9 @@ class DGA:
                         if coeff == 0:
                             continue
                         mon = " * ".join(f"a[{k}]" for k in word) if word else "1"
-                        if kind == 'lambda':
-                            s = f"λ * {mon}" if mon != "1" else "λ"
+                        if isinstance(kind, tuple):  # ('lambda', c), 1-indexed for display
+                            lsym = f"λ_{kind[1] + 1}"
+                            s = f"{lsym} * {mon}" if mon != "1" else lsym
                         else:
                             s = (mon if coeff == 1 else f"-{mon}" if coeff == -1
                                  else f"{coeff}*{mon}")

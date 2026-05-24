@@ -157,13 +157,13 @@ d = k.dga(GroundRing.Zn(3))    # Z/3
 
 | Member | Description |
 |--------|-------------|
-| `differential` | Differential; format depends on ring. Lazy, cached. |
-| `augmentations(grading_mod)` | All augmentations; cached. |
+| `differential` | Differential; format depends on ring. Lazy, cached. Z/2 and Z[λ₁,…,λₗ] supported for links; Z/n raises for links. For Z[λ], kind `('lambda', c)` (0-indexed) marks the basepoint cusp of component c. |
+| `augmentations(grading_mod)` | All augmentations; cached. Links supported over Z/2 (requires `grading_mod \| 2·rot_c`). |
 | `all_lin_hom(grading_mod, format)` | Distinct Poincaré-Chekanov polynomials; `format=True` returns strings. Cached. |
 | `lin_hom_reps(grading_mod)` | `(poly, representative_augmentation)` pairs, one per distinct polynomial. |
-| `check_d_squared()` | Verify d²=0 (Z/2 and Z[λ] only). |
+| `check_d_squared()` | Verify d²=0. Works for Z/2 and Z[λ₁,…,λₗ] including links. |
 | `aug_count()` | Normalized augmentation number (Z/2 and Z/p only). |
-| `print_differential()` | Print d(a[i]) for each generator. |
+| `print_differential()` | Print d(a[i]) for each generator. Displays λ₁, λ₂, … for multi-component links. |
 
 The `grading_mod` parameter controls grading: `0` = Z-graded, `1` = ungraded, `n ≥ 2` = Z/n-graded.
 
@@ -322,9 +322,14 @@ print(lnk.grading)                 # generator gradings (depends on maslov choic
 print(lnk.tb)                      # total writhe
 print(lnk.rot)                     # tuple of per-component rotation numbers
 print(lnk.ruling_invariant())      # graded ruling polynomial
+
+# Z[λ₁,λ₂] differential — one λ per component
+d = lnk.dga('Zlambda')
+d.print_differential()             # displays λ₁, λ₂ for the two components
+print(d.check_d_squared())         # True
 ```
 
-Shifting a component's seed by `k` shifts that component's crossing gradings by `k`:
+Shifting a component's seed by `k` shifts that component's crossing gradings by `k` for crossings between different components:
 
 ```python
 lnk0 = Leg('L2a1.0', maslov=[0, 0])
