@@ -129,7 +129,7 @@ The optional `maslov` parameter is a list of integers, one per link component (o
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `dga(ring=None)` | `DGA` | DGA over `ring`; defaults to `DEFAULT_GROUND_RING` (Z/2). Cached per ring. Links supported over Z/2 only. |
-| `augmentations(grading_mod, modulus)` | `List[Augmentation]` | Shorthand for `dga(Z/modulus).augmentations(grading_mod)`. Links over Z/2 require `grading_mod \| 2·rot_c`. |
+| `augmentations(grading_mod, modulus)` | `List[Augmentation]` | Shorthand for `dga(Z/modulus).augmentations(grading_mod)`. All rings supported for links; Z/2 and Z/n require `grading_mod \| 2·rot_c`. |
 | `all_lin_hom(grading_mod, modulus, format)` | `List[Dict[int,int]]` or `List[str]` | Distinct Poincaré-Chekanov polynomials; `format=True` returns strings. Links over Z/2 require same grading condition. |
 | `rulings(grading_mod)` | `List[List[int]]` | All graded rulings; cached per `grading_mod` |
 | `format_ruling_invariant(grading_mod=0)` | `str` | `ruling_invariant` as a polynomial string in z |
@@ -157,8 +157,8 @@ d = k.dga(GroundRing.Zn(3))    # Z/3
 
 | Member | Description |
 |--------|-------------|
-| `differential` | Differential; format depends on ring. Lazy, cached. Z/2 and Z[λ₁,…,λₗ] supported for links; Z/n raises for links. For Z[λ], kind `('lambda', c)` (0-indexed) marks the basepoint cusp of component c. |
-| `augmentations(grading_mod)` | All augmentations; cached. Links supported over Z/2 (requires `grading_mod \| 2·rot_c`). |
+| `differential` | Differential; format depends on ring. Lazy, cached. Supported for links over all rings. For Z[λ] and Z/n, kind `('lambda', c)` (0-indexed) marks the basepoint cusp of component c; Z/n coefficients are reduced mod n but λ_c terms remain symbolic. |
+| `augmentations(grading_mod, lambda_values)` | All augmentations; cached by `(grading_mod, lambda_values)`. Links supported over all rings (Z/2 and Z/n require `grading_mod \| 2·rot_c`). For Z/n (n>2): default sends λ→−1 for knots; for links, searches over all units (Z/n)^× per component. Override via `lambda_values={comp: val, …}`. Each returned `Augmentation.data` includes `('lambda', c)` keys for Z/n links. |
 | `all_lin_hom(grading_mod, format)` | Distinct Poincaré-Chekanov polynomials; `format=True` returns strings. Cached. |
 | `lin_hom_reps(grading_mod)` | `(poly, representative_augmentation)` pairs, one per distinct polynomial. |
 | `check_d_squared()` | Verify d²=0. Works for Z/2 and Z[λ₁,…,λₗ] including links. |

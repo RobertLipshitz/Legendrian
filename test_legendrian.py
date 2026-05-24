@@ -28,6 +28,10 @@ M52_B = [2, 3, 1, 3, 1, 2, 2, 3, 1, 3, 2]
 # 2-component link (σ_1 and σ_3 act on disjoint strand pairs)
 LINK_2 = [1, 3]
 
+# Hopf link: maslov=[1,0] gives grading [0,0,1,1]; has Z/3 augmentations
+HOPF = [2, 2]
+HOPF_MASLOV = [1, 0]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -79,10 +83,9 @@ class TestNumComponents:
     def test_z2_differential_d_squared_zero_for_link(self):
         assert Leg(LINK_2, maslov=[0, 0]).dga().check_d_squared()
 
-    def test_zn_differential_raises_for_link(self):
-        # Z/n (and Z[λ]) differential not yet implemented for links
-        with pytest.raises(ValueError):
-            _ = Leg(LINK_2, maslov=[0, 0]).dga('Z3').differential
+    def test_zn_differential_works_for_link(self):
+        d = Leg(LINK_2, maslov=[0, 0]).dga('Z3').differential
+        assert isinstance(d, list) and len(d) > 0
 
     def test_augmentations_z2_graded_works_for_link(self):
         # grading_mod=2: 2 | 2*rot_c = 2*1 always → valid for LINK_2
@@ -372,9 +375,81 @@ class TestZDiff:
     def test_link_zlambda_check_d_squared(self):
         assert Leg(LINK_2, maslov=[0, 0]).dga('Zlambda').check_d_squared()
 
-    def test_zn_still_raises_for_link(self):
-        with pytest.raises(ValueError):
-            _ = Leg(LINK_2, maslov=[0, 0]).dga('Z3').differential
+    def test_zn_differential_link_symbolic(self):
+        # Z/n differential for links keeps lambda_c symbolic (not pre-substituted)
+        d = Leg(LINK_2, maslov=[0, 0]).dga('Z3').differential
+        kinds = {kind for entry in d for (_, kind) in entry}
+        assert ('lambda', 0) in kinds
+        assert ('lambda', 1) in kinds
+
+
+# ---------------------------------------------------------------------------
+# Section 5b: Z/n augmentations for links
+# ---------------------------------------------------------------------------
+
+class TestZnLinkAugmentations:
+
+    def test_augmentations_returns_list(self):
+        augs = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3').augmentations()
+        assert isinstance(augs, list)
+
+    def test_augmentations_nonempty(self):
+        augs = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3').augmentations()
+        assert len(augs) == 7
+
+    def test_lambda_keys_in_data(self):
+        augs = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3').augmentations()
+        for a in augs:
+            assert ('lambda', 0) in a.data
+            assert ('lambda', 1) in a.data
+
+    def test_lambda_values_are_units(self):
+        from math import gcd
+        n = 3
+        augs = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3').augmentations()
+        for a in augs:
+            for c in (0, 1):
+                v = a.data[('lambda', c)]
+                assert gcd(v, n) == 1, f"lambda_{c}={v} is not a unit mod {n}"
+
+    def test_knot_default_lambda_preserved(self):
+        # For knots, default is lambda -> -1 = n-1 mod n
+        augs = Leg(TREFOIL).dga('Z3').augmentations()
+        assert len(augs) == 10
+        assert all(a.data.get(('lambda', 0)) == 2 for a in augs)
+
+    def test_knot_lambda_override_zero_augs(self):
+        # lambda=1 contradicts d_squared=0 constraint for trefoil over Z/3
+        augs = Leg(TREFOIL).dga('Z3').augmentations(lambda_values={0: 1})
+        assert len(augs) == 0
+
+    def test_lin_hom_works_for_link_augmentation(self):
+        augs = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3').augmentations()
+        lh = augs[0].lin_hom
+        assert isinstance(lh, dict)
+
+    def test_augmentations_cached(self):
+        dga = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3')
+        assert dga.augmentations() is dga.augmentations()
+
+    def test_lambda_values_param_changes_result(self):
+        dga = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3')
+        default_augs = dga.augmentations()
+        # Fix lambda_0=1 (a valid unit): result may differ from search-all
+        fixed_augs = dga.augmentations(lambda_values={0: 1})
+        assert isinstance(fixed_augs, list)
+        # Verify all returned augs have lambda_0=1
+        assert all(a.data[('lambda', 0)] == 1 for a in fixed_augs)
+
+    def test_lin_hom_grading_mod_nonzero(self):
+        # grading_mod=2 takes diff_mat_zp path; must handle new dict format and lambda factors
+        augs = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3').augmentations(grading_mod=2)
+        assert len(augs) == 7
+        lh = augs[0].lin_hom
+        assert isinstance(lh, dict)
+        # Should agree with grading_mod=0 result on this example (grades 0,1 only)
+        augs0 = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3').augmentations(grading_mod=0)
+        assert augs[0].lin_hom == augs0[0].lin_hom
 
 
 # ---------------------------------------------------------------------------

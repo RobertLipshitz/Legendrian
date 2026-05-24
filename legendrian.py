@@ -1437,12 +1437,12 @@ class DGA:
     ----------------------------------------
     dga.differential   native format for ring:
       Z2      list of list-of-monomials
-      ZLAMBDA list of (word_tuple, kind) → coeff dicts
-      Z/p     list of [(word_tuple, coeff), ...]
+      ZLAMBDA list of (word_tuple, kind) → coeff dicts  (kind = 'int' or ('lambda', c))
+      Z/p     same as ZLAMBDA format, integer coefficients reduced mod p
 
     Methods
     -------
-    augmentations(grading_mod)  List[Augmentation], cached per grading_mod
+    augmentations(grading_mod, lambda_values)  List[Augmentation], cached per (grading_mod, lambda_values)
     lin_hom(grading_mod)        List[Dict[int,int]], cached per grading_mod
     check_d_squared()           bool  (Z/2 and Z[λ] only)
     aug_count()                 float  normalized augmentation number (Z/2, Z/p)
@@ -1453,7 +1453,7 @@ class DGA:
         self.leg = leg
         self.ring = ring
         self._differential = None
-        self._augmentations_cache: Dict[int, List[Augmentation]] = {}
+        self._augmentations_cache: Dict[tuple, List['Augmentation']] = {}
         self._lin_hom_cache: Dict[int, List[Tuple[Dict[int, int], 'Augmentation']]] = {}
 
     def __repr__(self) -> str:
@@ -1582,19 +1582,14 @@ class DGA:
         """
         The DGA differential, computed once and cached. Format depends on self.ring.
 
-        Links are supported over Z/2 and Z[λ₁,…,λₗ] (ZLAMBDA). For ZLAMBDA the
-        returned list of dicts uses kind ('lambda', c) (0-indexed component c) for
-        the basepoint cusp of each component; 'int' terms are unchanged. Z/n raises
-        ValueError for links (requires searching λ_c values over (Z/n)^× — deferred).
+        Links are supported over all rings. For ZLAMBDA and Z/n the returned list of
+        dicts uses kind ('lambda', c) (0-indexed component c) for the basepoint cusp
+        of each component; 'int' terms are unchanged. Z/n integer coefficients are
+        reduced mod n; λ_c terms remain symbolic for evaluation at augmentation time.
         """
         if self._differential is not None:
             return self._differential
 
-        if self.leg.num_components != 1 and self.ring not in (GroundRing.Z2, GroundRing.ZLAMBDA):
-            raise ValueError(
-                "DGA differential over Z/n is not yet implemented for links; "
-                "use GroundRing.Z2 or GroundRing.ZLAMBDA."
-            )
 
         b = self.leg.braid
 
@@ -1639,18 +1634,18 @@ class DGA:
             self._differential = self._z_diff()
 
         else:
-            # Z/n: lift through Z[λ] then reduce mod n with λ = -1
+            # Z/n: lift through Z[λ], reduce integer coefficients mod n, keep λ_c symbolic
             n = self.ring.modulus
             zd = self._z_diff()
             result = []
             for poly_dict in zd:
-                terms: Dict[tuple, int] = {}
+                reduced: Dict[tuple, int] = {}
                 for (word, kind), coeff in poly_dict.items():
-                    c = coeff if kind == 'int' else -coeff
-                    c %= n
+                    key = (word, kind)
+                    c = coeff % n
                     if c:
-                        terms[word] = (terms.get(word, 0) + c) % n
-                result.append([(w, c) for w, c in terms.items() if c])
+                        reduced[key] = (reduced.get(key, 0) + c) % n
+                result.append({k: v for k, v in reduced.items() if v})
             self._differential = result
 
         return self._differential
@@ -1707,15 +1702,25 @@ class DGA:
             f'check_d_squared not yet implemented for {self.ring}'
         )
 
-    def augmentations(self, grading_mod: int = 0) -> List['Augmentation']:
+    def augmentations(
+        self,
+        grading_mod: int = 0,
+        lambda_values: Optional[Dict[int, int]] = None,
+    ) -> List['Augmentation']:
         """
         All augmentations of this DGA over self.ring.
-        Cached per grading_mod.
+        Cached per (grading_mod, lambda_values).
 
         grading_mod: 0 = Z-graded, 1 = ungraded, n >= 2 = Z/n-graded.
-        Links are supported over Z/2 only.
         Requires grading_mod | 2*rot_c for every component (same condition as rulings).
         Not supported for Z[λ] (use Z/2 or Z/p instead).
+
+        lambda_values: optional dict {component_index: value} fixing the image of each
+        lambda_c under the augmentation.  Only used for Z/n (n > 2).
+        - Knot default (1 component): lambda_0 -> n-1 (= -1 mod n).
+        - Link default: search over all units in (Z/n)^x for each component.
+        Override by passing e.g. lambda_values={0: 1} to fix lambda_0 = 1.
+        Z/2 ignores lambda_values (only one unit: 1 = -1 mod 2).
         """
         if self.ring == GroundRing.ZLAMBDA:
             raise NotImplementedError(
@@ -1734,7 +1739,20 @@ class DGA:
                 f"Z/{grading_mod}-graded augmentations require grading_mod | 2*rot_c "
                 f"for each component; got rot={self.leg.rot}"
             )
-        if grading_mod not in self._augmentations_cache:
+        modulus = self.ring.modulus
+        l = self.leg.num_components
+        if modulus > 2:
+            if lambda_values is not None:
+                lv: Optional[Dict[int, int]] = lambda_values
+            elif l == 1:
+                lv = {0: modulus - 1}  # knot default: lambda -> -1 mod n
+            else:
+                lv = None  # links: search over (Z/n)^x for each component
+        else:
+            lv = None  # Z/2: no lambda tracking needed
+        lv_key = frozenset(lv.items()) if lv is not None else None
+        cache_key = (grading_mod, lv_key)
+        if cache_key not in self._augmentations_cache:
             gr = self.leg.grading
             r = self.leg.rot
             d = self.differential
@@ -1816,7 +1834,8 @@ class DGA:
                         return False
                 return True
 
-            def aug_zn(zn_d, grading_mod, n):
+            def aug_zn(zn_d, grading_mod, n, num_comp, lv_inner):
+                from math import gcd as _gcd
                 g_eff = [x % (2 * r) for x in gr] if (grading_mod == 0 and isinstance(r, int) and r != 0) else gr[:]
 
                 def is_grade0(x):
@@ -1830,25 +1849,40 @@ class DGA:
                 grade0_gens = [i + 1 for i, x in enumerate(g_eff) if is_grade0(x)]
                 grade1_gens = [i + 1 for i, x in enumerate(g_eff) if is_grade1(x)]
                 grade0_set = set(grade0_gens)
+
+                units = [v for v in range(1, n) if _gcd(v, n) == 1]
+                lambda_ranges = [
+                    [lv_inner[c]] if (lv_inner is not None and c in lv_inner) else units
+                    for c in range(num_comp)
+                ]
+
+                # Extract conditions from grade-1 differentials.
+                # Lambda_c terms have empty word (always pass the grade-0 filter).
                 conditions = [
-                    [(w, c) for w, c in zn_d[g1 - 1] if all(gi in grade0_set for gi in w)]
+                    [(w, kind, coeff) for (w, kind), coeff in zn_d[g1 - 1].items()
+                     if all(gi in grade0_set for gi in w)]
                     for g1 in grade1_gens
                 ]
 
-                def eval_zn(poly, augm_dict):
+                def eval_cond(poly_terms, augm_dict):
                     total = 0
-                    for word, coeff in poly:
-                        term = coeff
+                    for word, kind, coeff in poly_terms:
+                        lam_factor = augm_dict.get(kind, 1) if isinstance(kind, tuple) else 1
+                        term = (coeff * lam_factor) % n
                         for gen in word:
                             term = (term * augm_dict.get(gen, 0)) % n
                         total = (total + term) % n
                     return total
 
                 result = []
-                for values in product(range(n), repeat=len(grade0_gens)):
-                    augm_dict = dict(zip(grade0_gens, values))
-                    if all(eval_zn(cond, augm_dict) == 0 for cond in conditions):
-                        result.append(augm_dict)
+                for gen_vals in product(range(n), repeat=len(grade0_gens)):
+                    base = dict(zip(grade0_gens, gen_vals))
+                    for lam_vals in product(*lambda_ranges):
+                        augm_dict = dict(base)
+                        for c, v in enumerate(lam_vals):
+                            augm_dict[('lambda', c)] = v
+                        if all(eval_cond(cond, augm_dict) == 0 for cond in conditions):
+                            result.append(dict(augm_dict))
                 return result
 
             if modulus == 2:
@@ -1865,11 +1899,11 @@ class DGA:
                             if aug_q(d_red, s):
                                 raw.append(s)
             else:
-                raw = aug_zn(d, grading_mod, modulus)
-            self._augmentations_cache[grading_mod] = [
+                raw = aug_zn(d, grading_mod, modulus, l, lv)
+            self._augmentations_cache[cache_key] = [
                 Augmentation(a, self, grading_mod) for a in raw
             ]
-        return self._augmentations_cache[grading_mod]
+        return self._augmentations_cache[cache_key]
 
     def lin_diff(self, augmentation: 'Augmentation', n: int = 1) -> List[List[List[int]]]:
         """
@@ -1949,10 +1983,11 @@ class DGA:
             rng_idx = {g: i for i, g in enumerate(rng)}
             mat = [[0] * len(domain) for _ in range(len(rng))]
             for col, gen_d in enumerate(domain):
-                for word, coeff in zn_d[gen_d - 1]:
+                for (word, kind), coeff in zn_d[gen_d - 1].items():
+                    lam_factor = augm_dict.get(kind, 1) if isinstance(kind, tuple) else 1
                     for j, a in enumerate(word):
                         if a in rng_idx:
-                            prod = coeff
+                            prod = (coeff * lam_factor) % n
                             for li, b_gen in enumerate(word):
                                 if li != j:
                                     prod = (prod * augm_dict.get(b_gen, 0)) % n
@@ -2039,10 +2074,11 @@ class DGA:
                 rng_idx = {g: i for i, g in enumerate(rng)}
                 mat = [[0] * len(domain) for _ in range(len(rng))]
                 for col, gen_d in enumerate(domain):
-                    for word, coeff in zn_d[gen_d - 1]:
+                    for (word, kind), coeff in zn_d[gen_d - 1].items():
+                        lam_factor = augm_dict.get(kind, 1) if isinstance(kind, tuple) else 1
                         for pos, a in enumerate(word):
                             if a in rng_idx:
-                                prod = coeff
+                                prod = (coeff * lam_factor) % p
                                 for li, b_gen in enumerate(word):
                                     if li != pos:
                                         prod = (prod * augm_dict.get(b_gen, 0)) % p
@@ -2161,8 +2197,8 @@ class Augmentation:
     Attributes
     ----------
     data    augmentation data:
-              Z/2 : List[int]      generators sent to 1 (others → 0)
-              Z/p : Dict[int,int]  generator → value in {0, ..., p−1}
+              Z/2 : List[int]           generators sent to 1 (others → 0)
+              Z/p : Dict[int|tuple,int] generator → value; also ('lambda', c) → unit value
     dga     the parent DGA
 
     Properties  (computed once, cached)
@@ -2178,6 +2214,14 @@ class Augmentation:
         self.grading_mod = grading_mod
 
     def __repr__(self) -> str:
+        if isinstance(self.data, dict):
+            gen_data = {k: v for k, v in self.data.items() if isinstance(k, int)}
+            lam_data = {k: v for k, v in self.data.items() if isinstance(k, tuple)}
+            parts = [f'ring={self.dga.ring!r}', f'grading_mod={self.grading_mod!r}',
+                     f'gens={gen_data!r}']
+            if lam_data:
+                parts.append(f'lambdas={lam_data!r}')
+            return f'Augmentation({", ".join(parts)})'
         return f'Augmentation({self.data!r}, ring={self.dga.ring!r}, grading_mod={self.grading_mod!r})'
 
     @cached_property
