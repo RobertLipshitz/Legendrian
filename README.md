@@ -373,7 +373,6 @@ This is a conversion and extension of a Mathematica notebook by Paul Melvin, Kir
 - [CP05] Yu. Chekanov and P. Pushkar, "Combinatorics of Legendrian links and the Arnol'd 4-conjectures," *Uspekhi Mat. Nauk* **60** (2005), no. 1, 99–154; translated in *Russian Math. Surveys* **60** (2005), no. 1, 95–149.
 - [ENS02] J. B. Etnyre, L. L. Ng, and J. M. Sabloff, "Invariants of Legendrian knots and coherent orientations," *J. Symplectic Geom.* **1** (2002), no. 2, 321–367. [DOI:10.4310/jsg.2001.v1.n2.a5](https://doi.org/10.4310/jsg.2001.v1.n2.a5)
 - [Fu03] D. Fuchs, "Chekanov–Eliashberg invariant of Legendrian knots: existence of augmentations," *J. Geom. Phys.* **47** (2003), no. 1, 43–65.
-- [Ng01] L. Ng, "The Legendrian satellite construction," arXiv:math/0112105, 2001.
 - [Ng03] L. Ng, "Computable Legendrian invariants," *Topology* **42** (2003), no. 1, 55–82.
 - [NS06] L. L. Ng and J. M. Sabloff, "The correspondence between augmentations and rulings for Legendrian knots," *Pacific J. Math.* **224** (2006), no. 1, 141–150. [DOI:10.2140/pjm.2006.224.141](https://doi.org/10.2140/pjm.2006.224.141)
 

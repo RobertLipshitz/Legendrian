@@ -2607,7 +2607,7 @@ def _cable_parts(leg: Leg):
 
 def whitehead_double(leg: Leg) -> Leg:
     """
-    Legendrian Whitehead double of leg. See [Ng01].
+    Legendrian Whitehead double of leg.
     Returns a new Leg whose braid encodes the Whitehead double plat closure.
     """
     pp, dc = _cable_parts(leg)
@@ -2616,7 +2616,7 @@ def whitehead_double(leg: Leg) -> Leg:
 
 def twisted_2cable(leg: Leg) -> Leg:
     """
-    Legendrian twisted 2-cable of leg. See [Ng01].
+    Legendrian twisted 2-cable of leg.
     Returns a new Leg whose braid encodes the twisted 2-cable plat closure.
     """
     pp, dc = _cable_parts(leg)
