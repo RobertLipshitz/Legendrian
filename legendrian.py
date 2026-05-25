@@ -899,7 +899,7 @@ class Leg:
         return tuple(abs(t // 2) for t in totals)
 
     def ruling_invariant(self, grading_mod: int = 0) -> Dict[int, int]:
-        """Ruling polynomial as a dictionary mapping degree to coefficient."""
+        """Ruling polynomial as a dictionary mapping degree to coefficient. See [CP05], [Fu03]."""
         c = self.num_cusps
         return dict(Counter(len(r) - c + 1 for r in self.rulings(grading_mod=grading_mod)))
 
@@ -999,7 +999,7 @@ class Leg:
         verbose: bool = False,
     ) -> List[List[int]]:
         """
-        All graded rulings, computed with meet-in-the-middle.
+        All graded rulings, computed with meet-in-the-middle. See [CP05], [Fu03].
         Cached per grading_mod (verbose output is not cached).
         grading_mod: 0 = Z-graded, 1 = ungraded, n >= 2 = Z/n-graded.
         Requires grading_mod | 2*rot_c for every component c (grading_mod=0
@@ -1592,6 +1592,10 @@ class DGA:
     def differential(self):
         """
         The DGA differential, computed once and cached. Format depends on self.ring.
+
+        The DGA itself is defined over Z/2 in [Ch02] and extended to Z-coefficients
+        with coherent orientations in [ENS02]; the plat-form algorithm used here
+        follows [Ng03].
 
         Links are supported over all rings. For ZLAMBDA and Z/n the returned list of
         dicts uses kind ('lambda', c) or ('lambda_inv', c) (0-indexed component c)
@@ -2370,7 +2374,7 @@ class Augmentation:
 
     @cached_property
     def double_products(self):
-        """Cup-product multiplication table on linearized cohomology (Z/2 only)."""
+        """Cup-product multiplication table on linearized cohomology (Z/2 only). See [CEKSW11]."""
         if self.dga.ring != GroundRing.Z2:
             raise NotImplementedError(
                 'double_products is only implemented over Z/2'
@@ -2603,7 +2607,7 @@ def _cable_parts(leg: Leg):
 
 def whitehead_double(leg: Leg) -> Leg:
     """
-    Legendrian Whitehead double of leg.
+    Legendrian Whitehead double of leg. See [Ng01].
     Returns a new Leg whose braid encodes the Whitehead double plat closure.
     """
     pp, dc = _cable_parts(leg)
@@ -2612,7 +2616,7 @@ def whitehead_double(leg: Leg) -> Leg:
 
 def twisted_2cable(leg: Leg) -> Leg:
     """
-    Legendrian twisted 2-cable of leg.
+    Legendrian twisted 2-cable of leg. See [Ng01].
     Returns a new Leg whose braid encodes the twisted 2-cable plat closure.
     """
     pp, dc = _cable_parts(leg)
