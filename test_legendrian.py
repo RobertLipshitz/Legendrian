@@ -38,7 +38,9 @@ HOPF_MASLOV = [1, 0]
 # ---------------------------------------------------------------------------
 
 def _aug_is_valid(augm: Augmentation) -> bool:
-    """Re-verify ε∘∂ = 0 over Z/2 using the augmentation's parent DGA."""
+    """Re-verify ε∘∂ = 0 over Z/2 using the augmentation's parent DGA.
+    Only correct for Z/2 augmentations: augm.data is List[int] there.
+    For Z/n, data is a Dict and this helper silently gives wrong results."""
     d = augm.dga.differential
     eps_set = set(augm.data)   # List[int] for Z/2
     for poly in d:
@@ -443,13 +445,15 @@ class TestZnLinkAugmentations:
 
     def test_lin_hom_grading_mod_nonzero(self):
         # grading_mod=2 takes diff_mat_zp path; must handle new dict format and lambda factors
-        augs = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3').augmentations(grading_mod=2)
+        dga = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3')
+        augs = dga.augmentations(grading_mod=2)
         assert len(augs) == 7
         lh = augs[0].lin_hom
         assert isinstance(lh, dict)
-        # Should agree with grading_mod=0 result on this example (grades 0,1 only)
-        augs0 = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3').augmentations(grading_mod=0)
-        assert augs[0].lin_hom == augs0[0].lin_hom
+        # The set of distinct lin_hom polynomials must agree regardless of grading_mod
+        set_gm2 = {frozenset(a.lin_hom.items()) for a in augs}
+        set_gm0 = {frozenset(a.lin_hom.items()) for a in dga.augmentations(grading_mod=0)}
+        assert set_gm2 == set_gm0
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +591,7 @@ class TestCheckDSquaredZ:
 
 
 # ---------------------------------------------------------------------------
-# Section 11: OO-specific interface tests
+# Section 10: OO-specific interface tests
 # ---------------------------------------------------------------------------
 
 class TestLegConstruction:
@@ -788,7 +792,7 @@ class TestNotImplemented:
 
 
 # ---------------------------------------------------------------------------
-# Section 12: Tangle input
+# Section 11: Tangle input
 # ---------------------------------------------------------------------------
 
 # Tangle for mK3_1: two LCs, then crossings 2,3,1,3,1,3,2 (1-indexed) → 0-indexed,
@@ -990,7 +994,7 @@ class TestTangleInput:
 
 
 # ---------------------------------------------------------------------------
-# Section 13: Grid diagram input
+# Section 12: Grid diagram input
 #
 # Convention: Leg((X_perm, O_perm)) where X_perm[j] is the row of the X
 # marker in column j, O_perm[j] is the row of the O marker in column j,
@@ -1139,7 +1143,7 @@ class TestGridInput:
 
 
 # ---------------------------------------------------------------------------
-# Section 14: Grid-atlas round-trips
+# Section 13: Grid-atlas round-trips
 #
 # All 138 grid representatives from GRID_ATLAS are tested against pre-computed
 # expected invariants.  For rot = 0 cases the ruling polynomial is also
@@ -1170,33 +1174,46 @@ def _build_grid_cases():
     return rows, ids
 
 
-_GRID_CASES, _GRID_IDS = _build_grid_cases()
-_RULING_CASES = [(g, nc, tb, rot, ri) for g, nc, tb, rot, ri in _GRID_CASES if ri is not None]
-_RULING_IDS   = [id_ for id_, (_, _, _, rot, ri) in zip(_GRID_IDS, _GRID_CASES) if ri is not None]
+_grid_cases_cache: list | None = None
+_grid_ids_cache: list | None = None
+
+
+def _get_grid_cases():
+    global _grid_cases_cache, _grid_ids_cache
+    if _grid_cases_cache is None:
+        _grid_cases_cache, _grid_ids_cache = _build_grid_cases()
+    return _grid_cases_cache, _grid_ids_cache
+
+
+def pytest_generate_tests(metafunc):
+    if metafunc.cls is TestGridAtlas:
+        cases, ids = _get_grid_cases()
+        ruling_cases = [c for c in cases if c[4] is not None]
+        ruling_ids = [id_ for id_, c in zip(ids, cases) if c[4] is not None]
+        if metafunc.function.__name__ == "test_ruling":
+            metafunc.parametrize("grid,nc,tb,rot,ruling", ruling_cases, ids=ruling_ids)
+        else:
+            metafunc.parametrize("grid,nc,tb,rot,ruling", cases, ids=ids)
 
 
 class TestGridAtlas:
     """Round-trip tests for every grid representative in GRID_ATLAS."""
 
-    @pytest.mark.parametrize("grid,nc,tb,rot,ruling", _GRID_CASES, ids=_GRID_IDS)
     def test_nc(self, grid, nc, tb, rot, ruling):
         assert Leg(grid).num_components == nc
 
-    @pytest.mark.parametrize("grid,nc,tb,rot,ruling", _GRID_CASES, ids=_GRID_IDS)
     def test_tb(self, grid, nc, tb, rot, ruling):
         assert Leg(grid).tb == tb
 
-    @pytest.mark.parametrize("grid,nc,tb,rot,ruling", _GRID_CASES, ids=_GRID_IDS)
     def test_rot(self, grid, nc, tb, rot, ruling):
         assert Leg(grid).rot == rot
 
-    @pytest.mark.parametrize("grid,nc,tb,rot,ruling", _RULING_CASES, ids=_RULING_IDS)
     def test_ruling(self, grid, nc, tb, rot, ruling):
         assert Leg(grid).ruling_invariant() == ruling
 
 
 # ---------------------------------------------------------------------------
-# Section 15: HOMFLY and Kauffman polynomial reality checks
+# Section 14: HOMFLY and Kauffman polynomial reality checks
 #
 # Rutherford (2006): for a max-tb Legendrian rep L of knot K with tb = tb(L),
 #   R2(L)(z) = coefficient of a^{-tb-1} in HOMFLY(K; a, z)
@@ -1330,7 +1347,7 @@ class TestPolynomialRealityCheck:
 
 
 # ---------------------------------------------------------------------------
-# Section 16: Link grid atlas — structural and DGA sanity checks
+# Section 15: Link grid atlas — structural and DGA sanity checks
 #
 # Tests that do not require pre-computed invariant values.  Pre-computed
 # tb, rot, and ruling data will be added in a later pass.

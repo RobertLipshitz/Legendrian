@@ -177,7 +177,7 @@ A single augmentation ε: (DGA generators) → (ground ring). Obtained via `DGA.
 | `dga` | The parent `DGA` |
 | `lin_hom` | Poincaré-Chekanov polynomial `{grading: dim}`; cached |
 | `format_poincare()` | `lin_hom` formatted as a polynomial string in t |
-| `cohomology_basis` | Basis for linearized cohomology (Z/2 only); cached |
+| `cohomology_basis` | Basis for linearized cohomology (Z/2 only); cached. Returns `List[List[List[int]]]`: outer list is one entry per grading space (highest grade first), middle list is the basis for that grade, inner list is the 1-indexed generator numbers whose F_2 coefficient is 1 in that basis vector. |
 | `double_products` | Cup-product table `(table, basis)` (Z/2 only); cached |
 
 ### `GroundRing`
