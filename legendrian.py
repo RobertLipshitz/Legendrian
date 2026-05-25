@@ -1477,7 +1477,8 @@ class DGA:
         DGA differential over Z[λ^±1].
         Returns a list (one entry per generator) of dicts mapping
           (word_as_tuple, kind) -> integer_coefficient
-        where kind is 'int' (plain integer) or 'lambda' (λ coefficient).
+        where kind is 'int' (plain integer), ('lambda', c) for λ_c, or
+        ('lambda_inv', c) for λ_c^{-1}.
         Used by self.differential for both ZLAMBDA and Z/n rings.
         """
         b = self.leg.braid
@@ -1553,13 +1554,20 @@ class DGA:
 
             bd = [None] + [glue_lists_enhanced(ub[i], lbe[i]) for i in range(1, n + 1)]
             comp_of, final_perm = self.leg._comp_and_perm
+            mu = self.leg.strand_potentials
             basepoint: Dict[int, int] = {}  # comp_index -> 0-indexed right cusp j
             for j in range(p):
                 basepoint[comp_of[final_perm[2 * j]]] = j  # last right cusp per component
             for i in range(n - p + 1, n + 1):
                 j = i - (n - p + 1)  # 0-indexed right cusp (1-indexed k = j+1 in _z_diff terms)
                 c = comp_of[final_perm[2 * j]]
-                coeff = ('lambda', c) if j == basepoint[c] else 1
+                if j == basepoint[c]:
+                    # Lower strand's Maslov potential determines cusp orientation:
+                    # odd → downward cusp → λ_c; even → upward cusp → λ_c^{-1}
+                    lower = final_perm[2 * j + 1]
+                    coeff = ('lambda', c) if mu[lower] % 2 == 1 else ('lambda_inv', c)
+                else:
+                    coeff = 1
                 entry = bd[i]
                 assert entry is not None
                 bd[i] = [([], coeff)] + entry
@@ -1586,9 +1594,11 @@ class DGA:
         The DGA differential, computed once and cached. Format depends on self.ring.
 
         Links are supported over all rings. For ZLAMBDA and Z/n the returned list of
-        dicts uses kind ('lambda', c) (0-indexed component c) for the basepoint cusp
-        of each component; 'int' terms are unchanged. Z/n integer coefficients are
-        reduced mod n; λ_c terms remain symbolic for evaluation at augmentation time.
+        dicts uses kind ('lambda', c) or ('lambda_inv', c) (0-indexed component c)
+        for the basepoint cusp of each component — the choice depends on the cusp's
+        orientation (lower-strand Maslov potential odd → λ_c, even → λ_c^{-1}).
+        'int' terms are unchanged. Z/n integer coefficients are reduced mod n;
+        λ_c terms remain symbolic for evaluation at augmentation time.
         """
         if self._differential is not None:
             return self._differential
@@ -1674,12 +1684,17 @@ class DGA:
         if self.ring == GroundRing.ZLAMBDA:
             d = self.differential
             gr = self.leg.grading
+            num_comp = self.leg.num_components
 
             def to_triples(poly_dict):
+                # Represent lambda monomial as a tuple of signed exponents, one per component.
                 result = []
                 for (word, kind), coeff in poly_dict.items():
-                    lam = frozenset({kind[1]}) if isinstance(kind, tuple) else frozenset()
-                    result.append((word, lam, coeff))
+                    lam = [0] * num_comp
+                    if isinstance(kind, tuple):
+                        c = kind[1]
+                        lam[c] = 1 if kind[0] == 'lambda' else -1
+                    result.append((word, tuple(lam), coeff))
                 return result
 
             d_triples = [to_triples(poly) for poly in d]
@@ -1694,7 +1709,8 @@ class DGA:
                         )
                         for d_word, d_lam, d_coeff in d_triples[gen - 1]:
                             new_word = prefix + d_word + suffix
-                            key = (new_word, lam | d_lam)
+                            new_lam = tuple(a + b for a, b in zip(lam, d_lam))
+                            key = (new_word, new_lam)
                             count[key] = count.get(key, 0) + coeff * right_sign * d_coeff
                 if any(v != 0 for v in count.values()):
                     return False
@@ -1869,7 +1885,11 @@ class DGA:
                 def eval_cond(poly_terms, augm_dict):
                     total = 0
                     for word, kind, coeff in poly_terms:
-                        lam_factor = augm_dict.get(kind, 1) if isinstance(kind, tuple) else 1
+                        if isinstance(kind, tuple):
+                            lam_val = augm_dict.get(('lambda', kind[1]), 1)
+                            lam_factor = lam_val if kind[0] == 'lambda' else pow(lam_val, -1, n)
+                        else:
+                            lam_factor = 1
                         term = (coeff * lam_factor) % n
                         for gen in word:
                             term = (term * augm_dict.get(gen, 0)) % n
@@ -2181,8 +2201,8 @@ class DGA:
                         if coeff == 0:
                             continue
                         mon = " * ".join(f"a[{k}]" for k in word) if word else "1"
-                        if isinstance(kind, tuple):  # ('lambda', c), 1-indexed for display
-                            lsym = f"λ_{kind[1] + 1}"
+                        if isinstance(kind, tuple):  # ('lambda'/'lambda_inv', c), 1-indexed
+                            lsym = f"λ_{kind[1] + 1}" if kind[0] == 'lambda' else f"λ_{kind[1] + 1}⁻¹"
                             s = f"{lsym} * {mon}" if mon != "1" else lsym
                         else:
                             s = (mon if coeff == 1 else f"-{mon}" if coeff == -1
@@ -2201,8 +2221,8 @@ class DGA:
                         if coeff == 0:
                             continue
                         mon = " * ".join(f"a[{k}]" for k in word) if word else "1"
-                        if isinstance(kind, tuple):  # ('lambda', c), 1-indexed for display
-                            lsym = f"λ_{kind[1] + 1}"
+                        if isinstance(kind, tuple):  # ('lambda'/'lambda_inv', c), 1-indexed
+                            lsym = f"λ_{kind[1] + 1}" if kind[0] == 'lambda' else f"λ_{kind[1] + 1}⁻¹"
                             s = f"{lsym} * {mon}" if mon != "1" else lsym
                         else:
                             s = mon if coeff == 1 else f"{coeff}*{mon}"

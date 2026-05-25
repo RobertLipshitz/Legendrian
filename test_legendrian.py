@@ -455,6 +455,26 @@ class TestZnLinkAugmentations:
         set_gm0 = {frozenset(a.lin_hom.items()) for a in dga.augmentations(grading_mod=0)}
         assert set_gm2 == set_gm0
 
+    @pytest.mark.parametrize("ring,n", [("Z3", 3), ("Z5", 5), ("Z7", 7)])
+    def test_lambda_product_condition(self, ring, n):
+        # Caitlin's result: every augmentation of a 2-component link must satisfy
+        # λ_0 · λ_1 = (-1)^2 = 1.  Tests both that the condition holds and that
+        # there is at least one augmentation to test it on.
+        augs = Leg(HOPF, maslov=HOPF_MASLOV).dga(ring).augmentations()
+        assert augs, f"no augmentations found over {ring}"
+        for a in augs:
+            prod = a.data[('lambda', 0)] * a.data[('lambda', 1)] % n
+            assert prod == 1, f"λ_0·λ_1 = {prod} ≠ 1 mod {n}"
+
+    @pytest.mark.parametrize("maslov", [[1, 0], [0, 1], [1, 1], [0, 0]])
+    def test_lambda_product_condition_maslov_independent(self, maslov):
+        # The product condition holds regardless of Maslov seed choice.
+        n = 5
+        augs = Leg(HOPF, maslov=maslov).dga('Z5').augmentations()
+        for a in augs:
+            prod = a.data[('lambda', 0)] * a.data[('lambda', 1)] % n
+            assert prod == 1, f"maslov={maslov}: λ_0·λ_1 = {prod} ≠ 1 mod {n}"
+
 
 # ---------------------------------------------------------------------------
 # Section 6: Cup product
@@ -1375,6 +1395,10 @@ def _build_link_cases():
 
 _LINK_CASES, _LINK_IDS = _build_link_cases()
 
+# Small, fast subset for product-condition tests: 2-component links with rot=(0,0)
+# and manageable augmentation counts over Z/3.  Chosen to keep per-test time < 0.1s.
+_PRODUCT_CHECK_LINKS = ['L2a1', 'L4a1', 'L6a1', 'L6a3', 'm(L4a1)', 'm(L5a1)']
+
 
 class TestLinkGridAtlas:
     """Structural and DGA sanity checks for every link in LINK_GRID_ATLAS."""
@@ -1406,6 +1430,16 @@ class TestLinkGridAtlas:
                 leg.rulings(grading_mod=0)
         else:
             assert isinstance(leg.rulings(grading_mod=0), list)
+
+    @pytest.mark.parametrize("name", _PRODUCT_CHECK_LINKS)
+    def test_lambda_product_condition_z3(self, name):
+        # Caitlin's result: every augmentation of a 2-component link satisfies
+        # λ_0 · λ_1 = (-1)^2 = 1.  Checked over Z/3 for a fast subset of atlas links.
+        grid = _LGA[name][0]
+        augs = Leg(grid).dga('Z3').augmentations()
+        for a in augs:
+            prod = a.data[('lambda', 0)] * a.data[('lambda', 1)] % 3
+            assert prod == 1, f"{name}: λ_0·λ_1 = {prod} ≠ 1 mod 3"
 
     @pytest.mark.parametrize("name,i,grid", _LINK_CASES, ids=_LINK_IDS)
     def test_zlambda_d_squared_zero(self, name, i, grid):
