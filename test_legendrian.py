@@ -269,6 +269,26 @@ class TestAugmentations:
     def test_aug_count_trefoil(self):
         assert Leg(TREFOIL).dga().aug_count() == 2.5
 
+    def test_aug_count_grading_mod_zero_matches_default(self):
+        d = Leg(TREFOIL).dga()
+        assert d.aug_count(grading_mod=0) == d.aug_count()
+
+    def test_aug_count_grading_mod_odd(self):
+        d = Leg(TREFOIL).dga()
+        # grading_mod=1 (ungraded): 20 ungraded augs, chi*_1=5, exp=-5/2
+        assert d.aug_count(grading_mod=1) == pytest.approx(20 * 2 ** (-2.5))
+        # grading_mod=3: 5 Z/3-graded augs, chi*_3=1, exp=-1/2
+        assert d.aug_count(grading_mod=3) == pytest.approx(5 * 2 ** (-0.5))
+        # fig-eight, grading_mod=3: 4 augs, chi*_3=3, exp=-3/2
+        assert Leg(FIG_EIGHT).dga().aug_count(grading_mod=3) == pytest.approx(4 * 2 ** (-1.5))
+
+    def test_aug_count_grading_mod_even_raises(self):
+        d = Leg(TREFOIL).dga()
+        with pytest.raises(NotImplementedError):
+            d.aug_count(grading_mod=2)
+        with pytest.raises(NotImplementedError):
+            d.aug_count(grading_mod=4)
+
     def test_chekanov_pair_aug_counts_differ(self):
         assert len(Leg(M52_A).augmentations()) == 2
         assert len(Leg(M52_B).augmentations()) == 12

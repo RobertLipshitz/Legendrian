@@ -1450,7 +1450,7 @@ class DGA:
     augmentations(grading_mod, lambda_values)  List[Augmentation], cached per (grading_mod, lambda_values)
     lin_hom(grading_mod)        List[Dict[int,int]], cached per grading_mod
     check_d_squared()           bool  (Z/2 and Z[λ] only)
-    aug_count()                 float  normalized augmentation number (Z/2, Z/p)
+    aug_count(grading_mod)      float  normalized augmentation number (Z/2, Z/p)
     print_differential()        print d(a[i]) for each generator
     """
 
@@ -2164,21 +2164,35 @@ class DGA:
         self.all_lin_hom(grading_mod=grading_mod)
         return list(self._lin_hom_cache[grading_mod])
 
-    def aug_count(self) -> float:
+    def aug_count(self, grading_mod: int = 0) -> float:
         """
-        Normalized graded augmentation number (Z-graded, Ng's normalization):
-        |ring|^((−1−χ)/2) × |Aug|.
+        Normalized graded augmentation number (Ng-Sabloff normalization).
+        |ring|^(−χ*_ρ/2) × |Aug_ρ|, where ρ = grading_mod.
+
+        grading_mod=0 (Z-graded): χ*_0 = Σ_{k≥0}(-1)^k a_k + Σ_{k<0}(-1)^{k+1} a_k,
+            with an additional −1 shift so the exponent is (−1−χ*_0)/2.
+        grading_mod=ρ odd: χ*_ρ = Σ_{k=0}^{ρ-1} (-1)^k a_k (a_k = #generators of degree k mod ρ).
+        grading_mod=ρ even, ρ>0: raises NotImplementedError (no well-defined invariant).
         Not supported for Z[λ].
         """
         if self.ring == GroundRing.ZLAMBDA:
             raise NotImplementedError('aug_count not defined over Z[λ]')
-        gr = self.leg.grading
-        n_aug = len(self.augmentations())
-        min_g, max_g = min(gr), max(gr)
-        chi = sum(((-1) ** k) * gr.count(k) for k in range(0, max_g + 1))
-        chi += sum(((-1) ** (k + 1)) * gr.count(k) for k in range(min_g, 0))
-        exp = (-1 - chi) / 2
+        if grading_mod > 0 and grading_mod % 2 == 0:
+            raise NotImplementedError(
+                f'aug_count not defined for even grading_mod={grading_mod}'
+            )
         n = self.ring.modulus
+        n_aug = len(self.augmentations(grading_mod=grading_mod))
+        gr = self.leg.grading
+        if grading_mod == 0:
+            min_g, max_g = min(gr), max(gr)
+            chi = sum(((-1) ** k) * gr.count(k) for k in range(0, max_g + 1))
+            chi += sum(((-1) ** (k + 1)) * gr.count(k) for k in range(min_g, 0))
+            exp = (-1 - chi) / 2
+        else:
+            rho = grading_mod
+            chi = sum(((-1) ** k) * sum(1 for g in gr if g % rho == k) for k in range(rho))
+            exp = -chi / 2
         return (n ** int(exp)) * n_aug if exp == int(exp) else (n ** exp) * n_aug
 
     def print_differential(self) -> None:

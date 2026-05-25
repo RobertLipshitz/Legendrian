@@ -162,7 +162,7 @@ d = k.dga(GroundRing.Zn(3))    # Z/3
 | `all_lin_hom(grading_mod, format)` | Distinct Poincaré-Chekanov polynomials; `format=True` returns strings. Cached. |
 | `lin_hom_reps(grading_mod)` | `(poly, representative_augmentation)` pairs, one per distinct polynomial. |
 | `check_d_squared()` | Verify d²=0. Works for Z/2 and Z[λ₁,…,λₗ] including links. |
-| `aug_count()` | Normalized augmentation number (Z/2 and Z/p only). |
+| `aug_count(grading_mod=0)` | Normalized augmentation number \|ring\|^(−χ\*\_ρ/2) × \|Aug\_ρ\| (Z/2 and Z/p only). `grading_mod=0`: Z-graded (χ\*\_0 uses the shifted Euler characteristic of [NS06]); `grading_mod=ρ` odd: χ\*\_ρ = Σ\_{k=0}^{ρ−1}(−1)^k a\_k; `grading_mod=ρ` even, ρ>0: raises `NotImplementedError`. |
 | `print_differential()` | Print d(a[i]) for each generator. Displays λ₁, λ₂, … for multi-component links. |
 
 The `grading_mod` parameter controls grading: `0` = Z-graded, `1` = ungraded, `n ≥ 2` = Z/n-graded.
@@ -365,6 +365,10 @@ python3 -m pytest test_legendrian.py
 ## Acknowledgments
 
 This is a conversion and extension of a Mathematica notebook by Paul Melvin, Kirk Mangels, Alden Walker, Lenny Ng, Josh Sabloff, and Sumana Shrestha. The conversion was performed by Anthropic's Claude chatbot, with assistance from Robert Lipshitz, and was supported by U.S. National Science Foundation grant DMS-2505715. RL thanks Lenhard Ng for helpful discussions about this code and the underlying mathematics.
+
+## References
+
+- [NS06] L. L. Ng and J. M. Sabloff, "The correspondence between augmentations and rulings for Legendrian knots," *Pacific J. Math.* **224** (2006), no. 1, 141–150. [DOI:10.2140/pjm.2006.224.141](https://doi.org/10.2140/pjm.2006.224.141)
 
 ## License
 
