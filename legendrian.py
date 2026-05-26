@@ -2621,3 +2621,31 @@ def twisted_2cable(leg: Leg) -> Leg:
     """
     pp, dc = _cable_parts(leg)
     return Leg(pp + [1] + dc + pp, name=f'Twisted2Cable({leg.name})')
+
+
+def two_copy(leg: Leg) -> Leg:
+    """
+    Legendrian 2-copy (push-off) of leg. See [Ng01].
+    Returns a 2-component link consisting of leg and its Legendrian push-off,
+    with both components having the same Maslov potential (seed 0).
+    Requires leg to be a single-component knot.
+    The linking number between the two components equals tb(leg).
+    """
+    if leg.num_components != 1:
+        raise ValueError('two_copy requires a single-component knot')
+    pp, dc = _cable_parts(leg)
+    return Leg(pp + dc + pp, maslov=[0, 0], name=f'TwoCopy({leg.name})')
+
+
+def two_copy_shifted(leg: Leg) -> Leg:
+    """
+    Legendrian 2-copy of leg with shifted Maslov potential. See [Ng01].
+    Same as two_copy but the first component has Maslov seed 1 and the second
+    has seed 0, shifting the grading of one copy by 1. This is the version
+    used for bilinearized contact homology computations.
+    Requires leg to be a single-component knot.
+    """
+    if leg.num_components != 1:
+        raise ValueError('two_copy_shifted requires a single-component knot')
+    pp, dc = _cable_parts(leg)
+    return Leg(pp + dc + pp, maslov=[1, 0], name=f'TwoCopyShifted({leg.name})')

@@ -257,13 +257,17 @@ Module-level functions that build a new `Leg` from an existing one:
 |----------|-------------|
 | `whitehead_double(leg)` | Legendrian Whitehead double of `leg` |
 | `twisted_2cable(leg)` | Legendrian twisted 2-cable of `leg` |
+| `two_copy(leg)` | Legendrian 2-copy (push-off): 2-component link of `leg` and its push-off; `maslov=[0,0]` |
+| `two_copy_shifted(leg)` | Same as `two_copy` but with `maslov=[1,0]`; used for bilinearized homology |
 
 ```python
-from legendrian import Leg, whitehead_double, twisted_2cable
+from legendrian import Leg, whitehead_double, twisted_2cable, two_copy, two_copy_shifted
 
 k = Leg('mK3_1')
-wd = whitehead_double(k)   # Leg('WhiteheadDouble(mK3_1)')
-tc = twisted_2cable(k)     # Leg('Twisted2Cable(mK3_1)')
+wd = whitehead_double(k)        # Leg('WhiteheadDouble(mK3_1)')
+tc = twisted_2cable(k)          # Leg('Twisted2Cable(mK3_1)')
+lk = two_copy(k)                # 2-component link; lk(K, K') = tb(k)
+lk2 = two_copy_shifted(k)       # same link, maslov shifted by 1 on first component
 print(wd.tb, wd.rot)
 ```
 
