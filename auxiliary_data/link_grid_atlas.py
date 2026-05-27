@@ -3,7 +3,7 @@ XO grid-diagram representatives for Legendrian 2-component links.
 
 Source
 ------
-Cromwell diagrams extracted from link_table.pdf (Etnyre–Vela-Vick table).
+Cromwell diagrams extracted from link_table.pdf (by Wutichai Chongchitmate, advised by Lenhard Ng), available from Ng's webpage.
 
 Conventions
 -----------

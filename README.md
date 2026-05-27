@@ -11,6 +11,7 @@ The algorithms originate in a Mathematica notebook by Paul Melvin, extended by K
 | `legendrian.py` | Primary API |
 | `test_legendrian.py` | Test suite (654 tests) |
 | `auxiliary_data/grid_atlas.py` | XO grid-diagram representatives from the [Ng Legendrian atlas](https://sites.math.duke.edu/~ng/atlas/) |
+| `auxiliary_data/link_grid_atlas.py` | XO grid-diagram representatives for 2-component Legendrian links (Chongchitmate–Ng) |
 | `auxiliary_data/petkova_atlas.py` | Loader for the [Petkova et al. atlas](https://github.com/ipetkova/LegendrianAtlas) CSV data |
 | `auxiliary_data/layer{1,2,3}.csv` | Downloaded CSV files from the Petkova atlas |
 
@@ -199,7 +200,9 @@ import legendrian
 legendrian.DEFAULT_GROUND_RING = GroundRing.Zn(5)
 ```
 
-## Atlas
+## Atlases
+
+### Included knot atlas
 
 `ATLAS` is a dict of pre-computed Legendrian representatives for knots through ~15 crossings, keyed by name:
 
@@ -224,7 +227,29 @@ Prefix `m` = mirror, `K` = knot, `L` = link. Legendrian index is 0-based; omit w
 
 Data sourced from the [Legendrian knot atlas](https://sites.math.duke.edu/~ng/atlas/).
 
-## Petkova Atlas
+### Link Grid Atlas
+
+`auxiliary_data/link_grid_atlas.py` provides XO grid-diagram representatives for 2-component Legendrian links. It contains 108 link types (215 total representatives) covering links through 11 crossings, sourced from Cromwell diagrams in a link table compiled by Wutichai Chongchitmate (advised by Lenhard Ng), available from [Ng's webpage](https://sites.math.duke.edu/~ng/atlas/).
+
+```python
+from auxiliary_data.link_grid_atlas import LINK_GRID_ATLAS
+from legendrian import Leg
+
+list(LINK_GRID_ATLAS)              # all available names, e.g. 'L2a1', 'm(L4a1)', ...
+LINK_GRID_ATLAS['L6a3']            # list of (X_perm, O_perm) pairs for L6a3
+
+# Construct a Legendrian representative (first of four for L6a3)
+grid = LINK_GRID_ATLAS['L6a3'][0]
+lnk = Leg(grid, maslov=[0, 0])
+print(lnk.num_components)          # 2
+print(lnk.tb, lnk.rot)
+```
+
+Grid conventions are identical to those in `auxiliary_data/grid_atlas.py`: rows 0-indexed from the bottom, columns from the left, vertical strands over horizontal strands. The `maslov` parameter must be supplied explicitly when computing graded invariants.
+
+**Naming convention:** `L2a1` = 2-component link with 2 crossings, alternating, first in table. Prefix `m(…)` = mirror. Names follow the Chongchitmate–Ng table.
+
+### Petkova Atlas
 
 `auxiliary_data/petkova_atlas.py` provides a read-only loader for the separate [Petkova et al. atlas](https://github.com/ipetkova/LegendrianAtlas), which covers 466 knot types with 2696 Legendrian representatives. It is kept separate because it uses different conventions and is less established in the literature.
 
@@ -258,7 +283,7 @@ Module-level functions that build a new `Leg` from an existing one:
 | `whitehead_double(leg)` | Legendrian Whitehead double of `leg` |
 | `twisted_2cable(leg)` | Legendrian twisted 2-cable of `leg` |
 | `two_copy(leg)` | Legendrian 2-copy (push-off): 2-component link of `leg` and its push-off; `maslov=[0,0]` |
-| `two_copy_shifted(leg)` | Same as `two_copy` but with `maslov=[1,0]`; used for bilinearized homology |
+| `two_copy_shifted(leg)` | Same as `two_copy` but with `maslov=[1,0]` |
 
 ```python
 from legendrian import Leg, whitehead_double, twisted_2cable, two_copy, two_copy_shifted

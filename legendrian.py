@@ -106,7 +106,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from __future__ import annotations
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 import re
 from collections import Counter
@@ -2609,7 +2609,10 @@ def whitehead_double(leg: Leg) -> Leg:
     """
     Legendrian Whitehead double of leg.
     Returns a new Leg whose braid encodes the Whitehead double plat closure.
+    Requires leg to be a single-component knot.
     """
+    if leg.num_components != 1:
+        raise ValueError('whitehead_double requires a single-component knot')
     pp, dc = _cable_parts(leg)
     return Leg([2] + pp + dc + pp, name=f'WhiteheadDouble({leg.name})')
 
@@ -2618,14 +2621,17 @@ def twisted_2cable(leg: Leg) -> Leg:
     """
     Legendrian twisted 2-cable of leg.
     Returns a new Leg whose braid encodes the twisted 2-cable plat closure.
+    Requires leg to be a single-component knot.
     """
+    if leg.num_components != 1:
+        raise ValueError('twisted_2cable requires a single-component knot')
     pp, dc = _cable_parts(leg)
     return Leg(pp + [1] + dc + pp, name=f'Twisted2Cable({leg.name})')
 
 
 def two_copy(leg: Leg) -> Leg:
     """
-    Legendrian 2-copy (push-off) of leg. See [Ng01].
+    Legendrian 2-copy (push-off) of leg.
     Returns a 2-component link consisting of leg and its Legendrian push-off,
     with both components having the same Maslov potential (seed 0).
     Requires leg to be a single-component knot.
@@ -2639,10 +2645,9 @@ def two_copy(leg: Leg) -> Leg:
 
 def two_copy_shifted(leg: Leg) -> Leg:
     """
-    Legendrian 2-copy of leg with shifted Maslov potential. See [Ng01].
+    Legendrian 2-copy of leg with shifted Maslov potential.
     Same as two_copy but the first component has Maslov seed 1 and the second
-    has seed 0, shifting the grading of one copy by 1. This is the version
-    used for bilinearized contact homology computations.
+    has seed 0, shifting the grading of one copy by 1.
     Requires leg to be a single-component knot.
     """
     if leg.num_components != 1:
