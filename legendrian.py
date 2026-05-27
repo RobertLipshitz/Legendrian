@@ -106,13 +106,13 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from __future__ import annotations
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 import re
 from collections import Counter
 from functools import cached_property
 from itertools import combinations, product
-from typing import Any, ClassVar, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, ClassVar, cast
 
 
 # ============================================================
@@ -284,10 +284,12 @@ class Leg:
     Classical invariants  (computed once, cached as properties)
     -----------------------------------------------------------
     num_components     int
+    strand_potentials  List[int]   Maslov potential, one value per braid strand
     grading            List[int]
     tb                 int   (Thurston-Bennequin number)
-    rot                int   (rotation number)
-    ruling_invariant(grading_mod=0)  Dict[int, int]  (ruling polynomial in z)
+    rot                int for knots; Tuple[int,...] for links (one per component)
+    ruling_invariant(grading_mod=0)  Dict[int, int]  (ruling polynomial in z;
+                       works for links when maslov is specified)
 
     DGA and augmentations
     ---------------------
@@ -297,16 +299,22 @@ class Leg:
     lin_hom(...)        shorthand for self.dga(Z/modulus).lin_hom(...)
     rulings(grading_mod) cached per grading_mod
 
+    Link support: differential works for links over Z/2 and Z[λ₁,…,λₗ] (one
+    variable per component, basepoint at the last right cusp of each component).
+    Augmentations and lin_hom work for links over Z/2 when maslov is set and
+    grading_mod | 2*rot_c for every component. Z/n links are deferred.
+
     Visualization
     -------------
-    draw(label_generators)  returns matplotlib Figure
-    export_svg(filename)    writes SVG, returns filename
+    draw(label_generators, method, color)  returns matplotlib Figure
+    export_svg(filename)                   writes SVG, returns filename
     """
 
     def __init__(
         self,
         input: Union[List[int], List[tuple], str, tuple],
         name: Optional[str] = None,
+        maslov: Optional[List[int]] = None,
     ) -> None:
         _is_grid = (
             isinstance(input, tuple) and len(input) == 2
@@ -370,9 +378,11 @@ class Leg:
                 f'got {type(input).__name__!r}'
             )
         if not _is_tangle and not _is_grid:
-            self.num_cusps = max(self.braid) // 2 + 1
+            self.num_cusps = max(self.braid) // 2 + 1 if self.braid else 1
+        assert self.num_cusps >= 1, f"num_cusps={self.num_cusps} is invalid"
         self._dga_cache: Dict[GroundRing, DGA] = {}
         self._rulings_cache: Dict[int, List[List[int]]] = {}
+        self._maslov_seeds: Optional[List[int]] = maslov
 
     def __repr__(self) -> str:
         return f'Leg({self.name!r})'
@@ -557,9 +567,7 @@ class Leg:
             import matplotlib.pyplot as plt
             stub = object.__new__(Leg)
             stub.tangle = seq[:]
-            fig = stub.draw(use_tangle=True)
-            for line in fig.axes[0].get_lines():
-                line.set_color('black')
+            fig = stub.draw(method='tangle', color=False)
             fig.axes[0].set_title(f'Step {step}: {rule_name}\n{seq}', fontsize=7)
             path = os.path.join(debug_dir, f'step_{step:04d}_{rule_name}.png')
             fig.savefig(path, dpi=80, bbox_inches='tight')
@@ -702,6 +710,110 @@ class Leg:
             union(at_pos[j], at_pos[j + 1])
         return len({find(i) for i in range(1, strand_num + 1)})
 
+    @cached_property
+    def _comp_and_perm(self) -> Tuple[List[int], List[int]]:
+        """
+        Returns (comp_of, final_perm) where:
+          comp_of[s]    = component index of 0-indexed strand s (ordered by first
+                          appearance scanning strands 0 … 2p-1)
+          final_perm[i] = strand at 0-indexed braid position i after the full braid
+        """
+        p = self.num_cusps
+        n = 2 * p
+
+        final_perm = list(range(n))
+        for gen in self.braid:
+            final_perm[gen - 1], final_perm[gen] = final_perm[gen], final_perm[gen - 1]
+
+        parent = list(range(n))
+
+        def _find(x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def _union(x: int, y: int) -> None:
+            px, py = _find(x), _find(y)
+            if px != py:
+                parent[px] = py
+
+        for j in range(p):
+            _union(2 * j, 2 * j + 1)
+        for j in range(p):
+            _union(final_perm[2 * j], final_perm[2 * j + 1])
+
+        root_to_comp: Dict[int, int] = {}
+        comp_of = [0] * n
+        for s in range(n):
+            r = _find(s)
+            if r not in root_to_comp:
+                root_to_comp[r] = len(root_to_comp)
+            comp_of[s] = root_to_comp[r]
+
+        return comp_of, final_perm
+
+    @cached_property
+    def strand_potentials(self) -> List[int]:
+        """
+        Maslov potential on braid strands (0-indexed, length 2*num_cusps).
+
+        strand_potentials[s] is the Maslov potential of strand s.  Strands are
+        numbered 0 … 2p-1.  Left cusp j (j=0…p-1) connects upper strand 2j and
+        lower strand 2j+1; right cusp j connects final_perm[2j] (upper) and
+        final_perm[2j+1] (lower).  At every cusp: μ[upper] = μ[lower] + 1.
+
+        Seeds (one integer per component, ordered by first appearance from the
+        top of the diagram) are taken from the maslov constructor argument; if
+        omitted, all seeds default to 0.  The seed for component i is the
+        Maslov potential of the lower strand of the topmost left cusp in that
+        component.
+        """
+        p = self.num_cusps
+        n = 2 * p
+        seeds = self._maslov_seeds if self._maslov_seeds is not None else [0] * self.num_components
+        if len(seeds) != self.num_components:
+            raise ValueError(
+                f'maslov must have length num_components={self.num_components}, '
+                f'got {len(seeds)}'
+            )
+
+        comp_of, final_perm = self._comp_and_perm
+
+        # Seed each component from the topmost left cusp in that component.
+        mu: List[Optional[int]] = [None] * n
+        seeded: set = set()
+        for j in range(p):
+            c = comp_of[2 * j]
+            if c not in seeded:
+                mu[2 * j + 1] = seeds[c]        # lower strand = seed
+                mu[2 * j] = seeds[c] + 1        # upper strand = seed + 1
+                seeded.add(c)
+
+        # BFS: propagate through cusp constraints until all strands are assigned.
+        changed = True
+        while changed:
+            changed = False
+            for j in range(p):
+                # Left cusp j: upper = 2j, lower = 2j+1
+                up, lo = 2 * j, 2 * j + 1
+                if mu[up] is None and mu[lo] is not None:
+                    mu[up] = mu[lo] + 1
+                    changed = True
+                elif mu[lo] is None and mu[up] is not None:
+                    mu[lo] = mu[up] - 1
+                    changed = True
+                # Right cusp j: upper = final_perm[2j], lower = final_perm[2j+1]
+                up, lo = final_perm[2 * j], final_perm[2 * j + 1]
+                if mu[up] is None and mu[lo] is not None:
+                    mu[up] = mu[lo] + 1
+                    changed = True
+                elif mu[lo] is None and mu[up] is not None:
+                    mu[lo] = mu[up] - 1
+                    changed = True
+
+        return mu  # type: ignore[return-value]  # all entries are filled
+
     @staticmethod
     def _trugrad(b: List[int], i: int) -> int:
         """Maslov grading of crossing i (1-indexed) in braid b."""
@@ -736,8 +848,14 @@ class Leg:
 
     @cached_property
     def grading(self) -> List[int]:
-        b = self.braid
-        gr = [self._trugrad(b, i) for i in range(1, len(b) + 1)]
+        mu = self.strand_potentials
+        perm = list(range(2 * self.num_cusps))
+        gr = []
+        for gen in self.braid:
+            s_upper = perm[gen - 1]
+            s_lower = perm[gen]
+            gr.append(mu[s_upper] - mu[s_lower])
+            perm[gen - 1], perm[gen] = perm[gen], perm[gen - 1]
         gr.extend([1] * self.num_cusps)
         return gr
 
@@ -746,17 +864,42 @@ class Leg:
         return sum(1 if x % 2 == 0 else -1 for x in self.grading)
 
     @cached_property
-    def rot(self) -> int:
-        b = self.braid
-        if not b:
-            return 0
-        m = max(b)
-        h = m + 2 if m % 2 == 0 else m + 1
-        backend = list(reversed([h - x for x in b]))
-        return abs((self._trugrad(b, 1) + self._trugrad(backend, len(b))) // 2)
+    def rot(self) -> Union[int, Tuple[int, ...]]:
+        """
+        Rotation number.
+
+        For a knot (num_components == 1): returns an int.
+        For a link: returns a tuple of ints, one per component, in the same
+        order as the maslov seeds (components ordered by first appearance from
+        the top of the front diagram).
+
+        Each value is non-negative (the sign depends on an orientation choice
+        that is not fixed by the plat-form data).
+        """
+        if self.num_components == 1:
+            b = self.braid
+            if not b:
+                return 0
+            m = max(b)
+            h = m + 2 if m % 2 == 0 else m + 1
+            backend = list(reversed([h - x for x in b]))
+            return abs((self._trugrad(b, 1) + self._trugrad(backend, len(b))) // 2)
+
+        # For each component, the rotation number is half the total "inconsistency"
+        # of the Maslov potential at the right cusps.  At right cusp j, the expected
+        # potential difference is +1 (μ[upper] = μ[lower] + 1); the actual difference
+        # may differ by 2r_c (twice the component's rotation number).
+        mu = self.strand_potentials
+        comp_of, final_perm = self._comp_and_perm
+        totals = [0] * self.num_components
+        for j in range(self.num_cusps):
+            up = final_perm[2 * j]
+            lo = final_perm[2 * j + 1]
+            totals[comp_of[up]] += mu[up] - mu[lo] - 1
+        return tuple(abs(t // 2) for t in totals)
 
     def ruling_invariant(self, grading_mod: int = 0) -> Dict[int, int]:
-        "Ruling polynomial as a dictionary with keys the degree and values the coefficient"
+        """Ruling polynomial as a dictionary mapping degree to coefficient. See [CP05], [Fu03]."""
         c = self.num_cusps
         return dict(Counter(len(r) - c + 1 for r in self.rulings(grading_mod=grading_mod)))
 
@@ -856,13 +999,24 @@ class Leg:
         verbose: bool = False,
     ) -> List[List[int]]:
         """
-        All graded rulings, computed with meet-in-the-middle.
+        All graded rulings, computed with meet-in-the-middle. See [CP05], [Fu03].
         Cached per grading_mod (verbose output is not cached).
         grading_mod: 0 = Z-graded, 1 = ungraded, n >= 2 = Z/n-graded.
+        Requires grading_mod | 2*rot_c for every component c (grading_mod=0
+        requires rot_c = 0); raises ValueError otherwise.
         """
+        rots = self.rot if isinstance(self.rot, tuple) else (self.rot,)
+        if grading_mod == 0:
+            if any(r != 0 for r in rots):
+                raise ValueError(
+                    f"Z-graded rulings require rot = 0 for each component; got rot={self.rot}"
+                )
+        elif any(2 * r % grading_mod != 0 for r in rots):
+            raise ValueError(
+                f"Z/{grading_mod}-graded rulings require grading_mod | 2*rot_c "
+                f"for each component; got rot={self.rot}"
+            )
         if grading_mod not in self._rulings_cache:
-            if self.num_components != 1:
-                raise ValueError("rulings are only defined for knots, not links")
             b = self.braid
             n = len(b)
             cut = n // 2
@@ -879,10 +1033,10 @@ class Leg:
                       f"{len(sw)} switchable crossing(s)")
 
             left = self._propagate_rulings(
-                ((i + 1, b[i]) for i in range(cut)), sw, p,
+                [(i + 1, b[i]) for i in range(cut)], sw, p,
                 verbose=verbose, label='left')
             right = self._propagate_rulings(
-                ((n - i, b[n - 1 - i]) for i in range(n - cut)), sw, p,
+                [(n - i, b[n - 1 - i]) for i in range(n - cut)], sw, p,
                 verbose=verbose, label='right')
 
             def _config_key(r):
@@ -932,15 +1086,15 @@ class Leg:
         self,
         grading_mod: int = 0,
         modulus: int = 2,
-        format: bool = False,
+        as_str: bool = False,
     ):
         """
         Set of distinct Poincaré-Chekanov polynomials over all augmentations.
         Delegates to self.dga(Z/modulus).all_lin_hom(grading_mod).
-        Returns List[Dict[int,int]], or List[str] if format=True.
+        Returns List[Dict[int,int]], or List[str] if as_str=True.
         """
         ring = GroundRing.Z2 if modulus == 2 else GroundRing.Zn(modulus)
-        return self.dga(ring).all_lin_hom(grading_mod=grading_mod, format=format)
+        return self.dga(ring).all_lin_hom(grading_mod=grading_mod, as_str=as_str)
 
     # --- Visualization ---
 
@@ -954,7 +1108,7 @@ class Leg:
             return i
 
         b = self.braid
-        strand_num = 2 * (max(b) // 2 + 1)
+        strand_num = 2 * (max(b) // 2 + 1) if b else 2 * self.num_cusps
         strands = []
         for i in range(1, strand_num + 1):
             start = -i - 0.5 if i % 2 == 1 else -i + 0.5
@@ -1024,23 +1178,116 @@ class Leg:
             raise AttributeError('No tangle stored on this Leg.')
         Leg._tangle_to_braid(self.tangle, debug_dir=debug_dir)
 
-    def draw(self, label_generators: bool = False, use_tangle: bool = False):
-        """Plot the front projection of this Leg. Returns a matplotlib Figure."""
+    @staticmethod
+    def _trace_grid_components(X_perm, O_perm):
+        """Return list of (segs_h, segs_v) per link component for a grid diagram."""
+        n = len(X_perm)
+        x_row_to_col = [None] * n
+        for j in range(n):
+            x_row_to_col[X_perm[j]] = j
+        visited = [False] * n
+        components = []
+        for start in range(n):
+            if visited[start]:
+                continue
+            segs_h, segs_v = [], []
+            col = start
+            while not visited[col]:
+                visited[col] = True
+                xr, or_ = X_perm[col], O_perm[col]
+                segs_v.append((col, min(xr, or_), max(xr, or_)))
+                next_col = x_row_to_col[or_]
+                segs_h.append((or_, min(col, next_col), max(col, next_col)))
+                col = next_col
+            components.append((segs_h, segs_v))
+        return components
+
+    def draw(self, label_generators: bool = False,
+             method: str = 'plat', color: bool = False,
+             use_tangle: bool = False):
+        """
+        Plot the front projection of this Leg. Returns a matplotlib Figure.
+
+        Parameters
+        ----------
+        label_generators : bool
+            Label DGA generators (plat method only).
+        method : {'plat', 'tangle', 'grid'}
+            'plat'   — braid-plat diagram (default). Always available.
+            'tangle' — tangle-sequence diagram. Requires self.tangle
+                       (initialize from a tangle sequence or grid).
+            'grid'   — XO grid diagram. Requires self.grid
+                       (initialize from a grid diagram).
+        color : bool
+            If True, each strand/component is drawn in a distinct color.
+            If False (default), everything is drawn in black.
+        use_tangle : bool
+            Deprecated. Use method='tangle' instead.
+        """
         import matplotlib.pyplot as plt
         import numpy as np
 
+        # Backwards-compatibility shim
         if use_tangle:
+            method = 'tangle'
+
+        _cmap = plt.get_cmap('tab10')
+        _tab_colors = [_cmap(i) for i in range(10)]
+
+        def _strand_color(k):
+            return _tab_colors[k % 10] if color else 'black'
+
+        # ── Grid diagram ──────────────────────────────────────────────────────
+        if method == 'grid':
+            if not hasattr(self, 'grid'):
+                raise AttributeError(
+                    'This Leg has no stored grid diagram; '
+                    "initialize from a grid diagram to use method='grid'"
+                )
+            X_perm, O_perm = self.grid
+            n = len(X_perm)
+            fig, ax = plt.subplots(figsize=(max(3, n * 0.55), max(3, n * 0.55)))
+            for i in range(n + 1):
+                ax.axhline(i, color='lightgray', lw=0.4, zorder=0)
+                ax.axvline(i, color='lightgray', lw=0.4, zorder=0)
+            for ci, (segs_h, segs_v) in enumerate(
+                    Leg._trace_grid_components(X_perm, O_perm)):
+                c = _strand_color(ci)
+                for col, r0, r1 in segs_v:
+                    ax.plot([col + .5] * 2, [r0 + .5, r1 + .5],
+                            color=c, lw=2, zorder=1)
+                for row, c0, c1 in segs_h:
+                    ax.plot([c0 + .5, c1 + .5], [row + .5] * 2,
+                            color=c, lw=2, zorder=2)
+            mk = 'black'
+            for j in range(n):
+                ax.plot(j + .5, X_perm[j] + .5, 'x',
+                        color=mk, ms=5, mew=1.5, zorder=3)
+                ax.plot(j + .5, O_perm[j] + .5, 'o',
+                        color=mk, ms=4, mew=1.2, fillstyle='none', zorder=3)
+            ax.set_xlim(0, n)
+            ax.set_ylim(0, n)
+            ax.set_aspect('equal')
+            name_str = getattr(self, 'name', '') or ''
+            ax.set_title(f'Grid diagram  {name_str}'.strip(), fontsize=9)
+            for s in ax.spines.values():
+                s.set_visible(False)
+            ax.tick_params(left=False, bottom=False,
+                           labelleft=False, labelbottom=False)
+            plt.tight_layout()
+            return fig
+
+        # ── Tangle diagram ────────────────────────────────────────────────────
+        if method == 'tangle':
             if not hasattr(self, 'tangle'):
                 raise AttributeError(
                     'This Leg has no stored tangle; '
-                    'initialize with a tangle sequence to use use_tangle=True'
+                    "initialize from a tangle sequence or grid to use method='tangle'"
                 )
             segments = self._trace_tangle()
             all_x = [pt[0] for seg in segments for pt in seg]
             all_y = [pt[1] for seg in segments for pt in seg]
             fig, ax = plt.subplots(figsize=(max(4, max(all_x) * 0.5), 3))
-            _cmap = plt.get_cmap('tab10')
-            colors = [_cmap(i) for i in range(10)]
             t = np.linspace(0, 1, 50)
             for k, seg in enumerate(segments):
                 px, py = [], []
@@ -1061,20 +1308,19 @@ class Leg:
                     else:
                         px.extend(bx.tolist())
                         py.extend(by.tolist())
-                ax.plot(px, py, color=colors[k % 10], linewidth=2,
+                ax.plot(px, py, color=_strand_color(k), linewidth=2,
                         solid_capstyle='round', solid_joinstyle='round')
             ax.yaxis.set_visible(False)
             ax.xaxis.set_visible(False)
-            ax.set_title(f'Legendrian Knot  tangle = {self.tangle}')
+            ax.set_title(f'Legendrian Knot  {self.name}')
             plt.tight_layout()
             return fig
 
+        # ── Plat diagram (default) ────────────────────────────────────────────
         b = self.braid
         strands = self._trace_braid()
         extra_w = 0.8 if label_generators else 0.0
         fig, ax = plt.subplots(figsize=(max(4, len(b) * 0.8) + extra_w, 3))
-        _cmap = plt.get_cmap('tab10')
-        colors = [_cmap(i) for i in range(10)]
         for k, strand in enumerate(strands):
             xs = np.array(range(1, len(strand) + 1), dtype=float)
             ys = np.array(strand, dtype=float)
@@ -1082,9 +1328,9 @@ class Leg:
             try:
                 from scipy.interpolate import make_interp_spline
                 spl = make_interp_spline(xs, ys, k=min(2, len(xs) - 1))
-                ax.plot(t_fine, spl(t_fine), color=colors[k % 10], linewidth=2)
+                ax.plot(t_fine, spl(t_fine), color=_strand_color(k), linewidth=2)
             except Exception:
-                ax.plot(xs, ys, color=colors[k % 10], linewidth=2)
+                ax.plot(xs, ys, color=_strand_color(k), linewidth=2)
         if label_generators:
             _bbox = dict(boxstyle='round,pad=0.15', facecolor='white',
                          edgecolor='gray', alpha=0.85)
@@ -1196,15 +1442,15 @@ class DGA:
     ----------------------------------------
     dga.differential   native format for ring:
       Z2      list of list-of-monomials
-      ZLAMBDA list of (word_tuple, kind) → coeff dicts
-      Z/p     list of [(word_tuple, coeff), ...]
+      ZLAMBDA list of (word_tuple, kind) → coeff dicts  (kind = 'int' or ('lambda', c))
+      Z/p     same as ZLAMBDA format, integer coefficients reduced mod p
 
     Methods
     -------
-    augmentations(grading_mod)  List[Augmentation], cached per grading_mod
+    augmentations(grading_mod, lambda_values)  List[Augmentation], cached per (grading_mod, lambda_values)
     lin_hom(grading_mod)        List[Dict[int,int]], cached per grading_mod
     check_d_squared()           bool  (Z/2 and Z[λ] only)
-    aug_count()                 float  normalized augmentation number (Z/2, Z/p)
+    aug_count(grading_mod)      float  normalized augmentation number (Z/2, Z/p)
     print_differential()        print d(a[i]) for each generator
     """
 
@@ -1212,7 +1458,7 @@ class DGA:
         self.leg = leg
         self.ring = ring
         self._differential = None
-        self._augmentations_cache: Dict[int, List[Augmentation]] = {}
+        self._augmentations_cache: Dict[tuple, List['Augmentation']] = {}
         self._lin_hom_cache: Dict[int, List[Tuple[Dict[int, int], 'Augmentation']]] = {}
 
     def __repr__(self) -> str:
@@ -1231,7 +1477,8 @@ class DGA:
         DGA differential over Z[λ^±1].
         Returns a list (one entry per generator) of dicts mapping
           (word_as_tuple, kind) -> integer_coefficient
-        where kind is 'int' (plain integer) or 'lambda' (λ coefficient).
+        where kind is 'int' (plain integer), ('lambda', c) for λ_c, or
+        ('lambda_inv', c) for λ_c^{-1}.
         Used by self.differential for both ZLAMBDA and Z/n rings.
         """
         b = self.leg.braid
@@ -1262,11 +1509,8 @@ class DGA:
             return result
 
         def diff_enhanced():
-            if not b:
-                return []
             p = self.leg.num_cusps
-            gr_b = [Leg._trugrad(b, i) for i in range(1, len(b) + 1)]
-            gr_b.extend([1] * p)
+            gr_b = self.leg.grading  # len = len(b) + p; correct for multi-component links
             bext = b + list(range(1, 2 * p, 2))
             n = len(bext)
 
@@ -1309,8 +1553,21 @@ class DGA:
                         lbe[i][j].append((path, sign))
 
             bd = [None] + [glue_lists_enhanced(ub[i], lbe[i]) for i in range(1, n + 1)]
+            comp_of, final_perm = self.leg._comp_and_perm
+            mu = self.leg.strand_potentials
+            basepoint: Dict[int, int] = {}  # comp_index -> 0-indexed right cusp j
+            for j in range(p):
+                basepoint[comp_of[final_perm[2 * j]]] = j  # last right cusp per component
             for i in range(n - p + 1, n + 1):
-                coeff = 'lambda' if i == n else 1
+                j = i - (n - p + 1)  # 0-indexed right cusp (1-indexed k = j+1 in _z_diff terms)
+                c = comp_of[final_perm[2 * j]]
+                if j == basepoint[c]:
+                    # Lower strand's Maslov potential determines cusp orientation:
+                    # odd → downward cusp → λ_c; even → upward cusp → λ_c^{-1}
+                    lower = final_perm[2 * j + 1]
+                    coeff = ('lambda', c) if mu[lower] % 2 == 1 else ('lambda_inv', c)
+                else:
+                    coeff = 1
                 entry = bd[i]
                 assert entry is not None
                 bd[i] = [([], coeff)] + entry
@@ -1322,8 +1579,8 @@ class DGA:
             assert terms is not None
             for word, coeff in terms:
                 key_word = tuple(word)
-                if coeff == 'lambda':
-                    k = (key_word, 'lambda')
+                if isinstance(coeff, tuple):  # ('lambda', c)
+                    k = (key_word, coeff)
                     poly[k] = poly.get(k, 0) + 1
                 else:
                     k = (key_word, 'int')
@@ -1333,12 +1590,22 @@ class DGA:
 
     @property
     def differential(self):
-        """The DGA differential, computed once and cached. Format depends on self.ring."""
+        """
+        The DGA differential, computed once and cached. Format depends on self.ring.
+
+        The DGA itself is defined over Z/2 in [Ch02] and extended to Z-coefficients
+        with coherent orientations in [ENS02]; the plat-form algorithm used here
+        follows [Ng03].
+
+        Links are supported over all rings. For ZLAMBDA and Z/n the returned list of
+        dicts uses kind ('lambda', c) or ('lambda_inv', c) (0-indexed component c)
+        for the basepoint cusp of each component — the choice depends on the cusp's
+        orientation (lower-strand Maslov potential odd → λ_c, even → λ_c^{-1}).
+        'int' terms are unchanged. Z/n integer coefficients are reduced mod n;
+        λ_c terms remain symbolic for evaluation at augmentation time.
+        """
         if self._differential is not None:
             return self._differential
-
-        if self.leg.num_components != 1:
-            raise ValueError("the DGA differential is only defined for knots, not links")
 
         b = self.leg.braid
 
@@ -1383,18 +1650,18 @@ class DGA:
             self._differential = self._z_diff()
 
         else:
-            # Z/n: lift through Z[λ] then reduce mod n with λ = -1
+            # Z/n: lift through Z[λ], reduce integer coefficients mod n, keep λ_c symbolic
             n = self.ring.modulus
             zd = self._z_diff()
             result = []
             for poly_dict in zd:
-                terms: Dict[tuple, int] = {}
+                reduced: Dict[tuple, int] = {}
                 for (word, kind), coeff in poly_dict.items():
-                    c = coeff if kind == 'int' else -coeff
-                    c %= n
+                    key = (word, kind)
+                    c = coeff % n
                     if c:
-                        terms[word] = (terms.get(word, 0) + c) % n
-                result.append([(w, c) for w, c in terms.items() if c])
+                        reduced[key] = (reduced.get(key, 0) + c) % n
+                result.append({k: v for k, v in reduced.items() if v})
             self._differential = result
 
         return self._differential
@@ -1421,10 +1688,18 @@ class DGA:
         if self.ring == GroundRing.ZLAMBDA:
             d = self.differential
             gr = self.leg.grading
+            num_comp = self.leg.num_components
 
             def to_triples(poly_dict):
-                return [(word, 1 if kind == 'lambda' else 0, coeff)
-                        for (word, kind), coeff in poly_dict.items()]
+                # Represent lambda monomial as a tuple of signed exponents, one per component.
+                result = []
+                for (word, kind), coeff in poly_dict.items():
+                    lam = [0] * num_comp
+                    if isinstance(kind, tuple):
+                        c = kind[1]
+                        lam[c] = 1 if kind[0] == 'lambda' else -1
+                    result.append((word, tuple(lam), coeff))
+                return result
 
             d_triples = [to_triples(poly) for poly in d]
             for triples in d_triples:
@@ -1438,7 +1713,8 @@ class DGA:
                         )
                         for d_word, d_lam, d_coeff in d_triples[gen - 1]:
                             new_word = prefix + d_word + suffix
-                            key = (new_word, lam + d_lam)
+                            new_lam = tuple(a + b for a, b in zip(lam, d_lam))
+                            key = (new_word, new_lam)
                             count[key] = count.get(key, 0) + coeff * right_sign * d_coeff
                 if any(v != 0 for v in count.values()):
                     return False
@@ -1448,22 +1724,57 @@ class DGA:
             f'check_d_squared not yet implemented for {self.ring}'
         )
 
-    def augmentations(self, grading_mod: int = 0) -> List['Augmentation']:
+    def augmentations(
+        self,
+        grading_mod: int = 0,
+        lambda_values: Optional[Dict[int, int]] = None,
+    ) -> List['Augmentation']:
         """
         All augmentations of this DGA over self.ring.
-        Cached per grading_mod.
+        Cached per (grading_mod, lambda_values).
 
         grading_mod: 0 = Z-graded, 1 = ungraded, n >= 2 = Z/n-graded.
+        Requires grading_mod | 2*rot_c for every component (same condition as rulings).
         Not supported for Z[λ] (use Z/2 or Z/p instead).
+
+        lambda_values: optional dict {component_index: value} fixing the image of each
+        lambda_c under the augmentation.  Only used for Z/n (n > 2).
+        - Knot default (1 component): lambda_0 -> n-1 (= -1 mod n).
+        - Link default: search over all units in (Z/n)^x for each component.
+        Override by passing e.g. lambda_values={0: 1} to fix lambda_0 = 1.
+        Z/2 ignores lambda_values (only one unit: 1 = -1 mod 2).
         """
         if self.ring == GroundRing.ZLAMBDA:
             raise NotImplementedError(
                 'Augmentations are not computed directly over Z[λ]. '
                 'Use leg.dga(GroundRing.Z2) or leg.dga(GroundRing.Zn(p)).'
             )
-        if grading_mod not in self._augmentations_cache:
-            if self.leg.num_components != 1:
-                raise ValueError("augmentations are only defined for knots, not links")
+        _rots = self.leg.rot if isinstance(self.leg.rot, tuple) else (self.leg.rot,)
+        if grading_mod == 0:
+            if any(r != 0 for r in _rots):
+                raise ValueError(
+                    f"Z-graded augmentations require rot = 0 for each component; "
+                    f"got rot={self.leg.rot}"
+                )
+        elif any(2 * r % grading_mod != 0 for r in _rots):
+            raise ValueError(
+                f"Z/{grading_mod}-graded augmentations require grading_mod | 2*rot_c "
+                f"for each component; got rot={self.leg.rot}"
+            )
+        modulus = self.ring.modulus
+        num_comp = self.leg.num_components
+        if modulus > 2:
+            if lambda_values is not None:
+                lv: Optional[Dict[int, int]] = lambda_values
+            elif num_comp == 1:
+                lv = {0: modulus - 1}  # knot default: lambda -> -1 mod n
+            else:
+                lv = None  # links: search over (Z/n)^x for each component
+        else:
+            lv = None  # Z/2: no lambda tracking needed
+        lv_key = frozenset(lv.items()) if lv is not None else None
+        cache_key = (grading_mod, lv_key)
+        if cache_key not in self._augmentations_cache:
             gr = self.leg.grading
             r = self.leg.rot
             d = self.differential
@@ -1495,7 +1806,7 @@ class DGA:
             def ac(dd, grading_mod):
                 a1_local: List[int] = []
                 g = gr[:]
-                if grading_mod == 0 and r != 0:
+                if grading_mod == 0 and isinstance(r, int) and r != 0:
                     g = [x % (2 * r) for x in g]
 
                 def is_active(x):
@@ -1523,17 +1834,17 @@ class DGA:
                     return sorted(set(res))
 
                 if is_impossible(work):
-                    return [], [], [], []
+                    return None, None, None, None
                 c0, c1 = get_c0(work), get_c1(work)
                 while c0 or c1:
                     if set(c0) & set(c1):
-                        return [], [], [], []
+                        return None, None, None, None
                     work = trim(sub(rmv(work, c0), c1))
                     aQ_l = [x for x in aQ_l if x not in c0 and x not in c1]
                     a1_local = sorted(set(a1_local) | set(c1))
                     a0_l = sorted(set(a0_l) | set(c0))
                     if is_impossible(work):
-                        return [], [], [], []
+                        return None, None, None, None
                     c0, c1 = get_c0(work), get_c1(work)
                 return aQ_l, a1_local, a0_l, work
 
@@ -1545,8 +1856,9 @@ class DGA:
                         return False
                 return True
 
-            def aug_zn(zn_d, grading_mod, n):
-                g_eff = [x % (2 * r) for x in gr] if (grading_mod == 0 and r != 0) else gr[:]
+            def aug_zn(zn_d, grading_mod, n, num_comp, lv_inner):
+                from math import gcd as _gcd
+                g_eff = [x % (2 * r) for x in gr] if (grading_mod == 0 and isinstance(r, int) and r != 0) else gr[:]
 
                 def is_grade0(x):
                     return x == 0 if grading_mod == 0 else x % grading_mod == 0
@@ -1559,31 +1871,52 @@ class DGA:
                 grade0_gens = [i + 1 for i, x in enumerate(g_eff) if is_grade0(x)]
                 grade1_gens = [i + 1 for i, x in enumerate(g_eff) if is_grade1(x)]
                 grade0_set = set(grade0_gens)
+
+                units = [v for v in range(1, n) if _gcd(v, n) == 1]
+                lambda_ranges = [
+                    [lv_inner[c]] if (lv_inner is not None and c in lv_inner) else units
+                    for c in range(num_comp)
+                ]
+
+                # Extract conditions from grade-1 differentials.
+                # Lambda_c terms have empty word (always pass the grade-0 filter).
                 conditions = [
-                    [(w, c) for w, c in zn_d[g1 - 1] if all(gi in grade0_set for gi in w)]
+                    [(w, kind, coeff) for (w, kind), coeff in zn_d[g1 - 1].items()
+                     if all(gi in grade0_set for gi in w)]
                     for g1 in grade1_gens
                 ]
 
-                def eval_zn(poly, augm_dict):
+                def eval_cond(poly_terms, augm_dict):
                     total = 0
-                    for word, coeff in poly:
-                        term = coeff
+                    for word, kind, coeff in poly_terms:
+                        if isinstance(kind, tuple):
+                            lam_val = augm_dict.get(('lambda', kind[1]), 1)
+                            lam_factor = lam_val if kind[0] == 'lambda' else pow(lam_val, -1, n)
+                        else:
+                            lam_factor = 1
+                        term = (coeff * lam_factor) % n
                         for gen in word:
                             term = (term * augm_dict.get(gen, 0)) % n
                         total = (total + term) % n
                     return total
 
                 result = []
-                for values in product(range(n), repeat=len(grade0_gens)):
-                    augm_dict = dict(zip(grade0_gens, values))
-                    if all(eval_zn(cond, augm_dict) == 0 for cond in conditions):
-                        result.append(augm_dict)
+                for gen_vals in product(range(n), repeat=len(grade0_gens)):
+                    base = dict(zip(grade0_gens, gen_vals))
+                    for lam_vals in product(*lambda_ranges):
+                        augm_dict = dict(base)
+                        for c, v in enumerate(lam_vals):
+                            augm_dict[('lambda', c)] = v
+                        if all(eval_cond(cond, augm_dict) == 0 for cond in conditions):
+                            result.append(dict(augm_dict))
                 return result
 
             if modulus == 2:
                 aQ, a1, a0, d_red = ac(d, grading_mod)
-                if not aQ and not a1:
+                if aQ is None:
                     raw = []
+                elif not aQ and not a1:
+                    raw = [[]]
                 else:
                     raw = []
                     for sz in range(len(aQ) + 1):
@@ -1592,11 +1925,11 @@ class DGA:
                             if aug_q(d_red, s):
                                 raw.append(s)
             else:
-                raw = aug_zn(d, grading_mod, modulus)
-            self._augmentations_cache[grading_mod] = [
+                raw = aug_zn(d, grading_mod, modulus, num_comp, lv)
+            self._augmentations_cache[cache_key] = [
                 Augmentation(a, self, grading_mod) for a in raw
             ]
-        return self._augmentations_cache[grading_mod]
+        return self._augmentations_cache[cache_key]
 
     def lin_diff(self, augmentation: 'Augmentation', n: int = 1) -> List[List[List[int]]]:
         """
@@ -1608,7 +1941,15 @@ class DGA:
         n=1 (default) gives the linearized differential — the map one would
         normally call the linearized differential in contact homology.
         n=2 gives the quadratic part, used for cup products.
+
+        Only implemented over Z/2. For Z/n linearized homology use
+        ``_dim_homology_zn`` directly.
         """
+        if self.ring != GroundRing.Z2:
+            raise NotImplementedError(
+                'lin_diff is only implemented over Z/2; '
+                'use _dim_homology_zn for Z/n linearized homology.'
+            )
         d = self.differential
         aug_set = set(augmentation.data)
         aug_d = []
@@ -1658,6 +1999,12 @@ class DGA:
         zn_d = self.differential
         augm_dict = augmentation.data
         n = self.ring.modulus
+        if n < 2 or any(n % k == 0 for k in range(2, int(n**0.5) + 1)):
+            raise NotImplementedError(
+                f'Linearized homology dimensions require a field coefficient ring; '
+                f'Z/{n} is not a field (n must be prime). '
+                f'Augmentation enumeration over Z/{n} is still supported.'
+            )
         gs = self._gens_spaces
 
         def rank_zn(mat):
@@ -1676,10 +2023,11 @@ class DGA:
             rng_idx = {g: i for i, g in enumerate(rng)}
             mat = [[0] * len(domain) for _ in range(len(rng))]
             for col, gen_d in enumerate(domain):
-                for word, coeff in zn_d[gen_d - 1]:
+                for (word, kind), coeff in zn_d[gen_d - 1].items():
+                    lam_factor = augm_dict.get(kind, 1) if isinstance(kind, tuple) else 1
                     for j, a in enumerate(word):
                         if a in rng_idx:
-                            prod = coeff
+                            prod = (coeff * lam_factor) % n
                             for li, b_gen in enumerate(word):
                                 if li != j:
                                     prod = (prod * augm_dict.get(b_gen, 0)) % n
@@ -1766,10 +2114,11 @@ class DGA:
                 rng_idx = {g: i for i, g in enumerate(rng)}
                 mat = [[0] * len(domain) for _ in range(len(rng))]
                 for col, gen_d in enumerate(domain):
-                    for word, coeff in zn_d[gen_d - 1]:
+                    for (word, kind), coeff in zn_d[gen_d - 1].items():
+                        lam_factor = augm_dict.get(kind, 1) if isinstance(kind, tuple) else 1
                         for pos, a in enumerate(word):
                             if a in rng_idx:
-                                prod = coeff
+                                prod = (coeff * lam_factor) % p
                                 for li, b_gen in enumerate(word):
                                     if li != pos:
                                         prod = (prod * augm_dict.get(b_gen, 0)) % p
@@ -1785,11 +2134,11 @@ class DGA:
                     result[j] = dim
             return result
 
-    def all_lin_hom(self, grading_mod: int = 0, format: bool = False):
+    def all_lin_hom(self, grading_mod: int = 0, as_str: bool = False):
         """
         Set of distinct Poincaré-Chekanov polynomials over all augmentations.
         Cached per grading_mod.  Not supported for Z[λ].
-        Returns List[Dict[int,int]], or List[str] if format=True.
+        Returns List[Dict[int,int]], or List[str] if as_str=True.
         """
         if self.ring == GroundRing.ZLAMBDA:
             raise NotImplementedError('all_lin_hom not implemented over Z[λ]')
@@ -1805,7 +2154,7 @@ class DGA:
             results.sort(key=lambda pair: sorted(pair[0].items()))
             self._lin_hom_cache[grading_mod] = results
         pairs = self._lin_hom_cache[grading_mod]
-        if format:
+        if as_str:
             return [augm.format_poincare() for _, augm in pairs]
         return [poly for poly, _ in pairs]
 
@@ -1819,21 +2168,35 @@ class DGA:
         self.all_lin_hom(grading_mod=grading_mod)
         return list(self._lin_hom_cache[grading_mod])
 
-    def aug_count(self) -> float:
+    def aug_count(self, grading_mod: int = 0) -> float:
         """
-        Normalized graded augmentation number (Z-graded, Ng's normalization):
-        |ring|^((−1−χ)/2) × |Aug|.
+        Normalized graded augmentation number (Ng-Sabloff normalization).
+        |ring|^(−χ*_ρ/2) × |Aug_ρ|, where ρ = grading_mod.
+
+        grading_mod=0 (Z-graded): χ*_0 = Σ_{k≥0}(-1)^k a_k + Σ_{k<0}(-1)^{k+1} a_k,
+            with an additional −1 shift so the exponent is (−1−χ*_0)/2.
+        grading_mod=ρ odd: χ*_ρ = Σ_{k=0}^{ρ-1} (-1)^k a_k (a_k = #generators of degree k mod ρ).
+        grading_mod=ρ even, ρ>0: raises NotImplementedError (no well-defined invariant).
         Not supported for Z[λ].
         """
         if self.ring == GroundRing.ZLAMBDA:
             raise NotImplementedError('aug_count not defined over Z[λ]')
-        gr = self.leg.grading
-        n_aug = len(self.augmentations())
-        min_g, max_g = min(gr), max(gr)
-        chi = sum(((-1) ** k) * gr.count(k) for k in range(0, max_g + 1))
-        chi += sum(((-1) ** (k + 1)) * gr.count(k) for k in range(min_g, 0))
-        exp = (-1 - chi) / 2
+        if grading_mod > 0 and grading_mod % 2 == 0:
+            raise NotImplementedError(
+                f'aug_count not defined for even grading_mod={grading_mod}'
+            )
         n = self.ring.modulus
+        n_aug = len(self.augmentations(grading_mod=grading_mod))
+        gr = self.leg.grading
+        if grading_mod == 0:
+            min_g, max_g = min(gr), max(gr)
+            chi = sum(((-1) ** k) * gr.count(k) for k in range(0, max_g + 1))
+            chi += sum(((-1) ** (k + 1)) * gr.count(k) for k in range(min_g, 0))
+            exp = (-1 - chi) / 2
+        else:
+            rho = grading_mod
+            chi = sum(((-1) ** k) * sum(1 for g in gr if g % rho == k) for k in range(rho))
+            exp = -chi / 2
         return (n ** int(exp)) * n_aug if exp == int(exp) else (n ** exp) * n_aug
 
     def print_differential(self) -> None:
@@ -1846,7 +2209,8 @@ class DGA:
                 ) or '0'
                 print(f'  d(a[{i + 1}]) = {terms}')
         elif self.ring == GroundRing.ZLAMBDA:
-            for i, poly_dict in enumerate(cast(List[Dict[Any, Any]], self.differential)):
+            # cast: differential is List[Dict] here but typed as List[List] for Z/2 compatibility
+            for i, poly_dict in enumerate(cast(list[dict[Any, Any]], self.differential)):
                 if not poly_dict:
                     entry = "0"
                 else:
@@ -1855,8 +2219,9 @@ class DGA:
                         if coeff == 0:
                             continue
                         mon = " * ".join(f"a[{k}]" for k in word) if word else "1"
-                        if kind == 'lambda':
-                            s = f"λ * {mon}" if mon != "1" else "λ"
+                        if isinstance(kind, tuple):  # ('lambda'/'lambda_inv', c), 1-indexed
+                            lsym = f"λ_{kind[1] + 1}" if kind[0] == 'lambda' else f"λ_{kind[1] + 1}⁻¹"
+                            s = f"{lsym} * {mon}" if mon != "1" else lsym
                         else:
                             s = (mon if coeff == 1 else f"-{mon}" if coeff == -1
                                  else f"{coeff}*{mon}")
@@ -1864,14 +2229,24 @@ class DGA:
                     entry = " + ".join(terms) if terms else "0"
                 print(f'  d(a[{i + 1}]) = {entry}')
         else:
-            for i, terms in enumerate(self.differential):
-                s = ' + '.join(
-                    ('' if c == 1 else f'{c}*') + (
-                        ' * '.join(f'a[{g}]' for g in w) if w else '1'
-                    )
-                    for w, c in terms
-                ) or '0'
-                print(f'  d(a[{i + 1}]) = {s}')
+            # Z/n: same dict format as ZLAMBDA; coefficients are non-negative mod n
+            for i, poly_dict in enumerate(self.differential):
+                if not poly_dict:
+                    entry = "0"
+                else:
+                    terms = []
+                    for (word, kind), coeff in poly_dict.items():
+                        if coeff == 0:
+                            continue
+                        mon = " * ".join(f"a[{k}]" for k in word) if word else "1"
+                        if isinstance(kind, tuple):  # ('lambda'/'lambda_inv', c), 1-indexed
+                            lsym = f"λ_{kind[1] + 1}" if kind[0] == 'lambda' else f"λ_{kind[1] + 1}⁻¹"
+                            s = f"{lsym} * {mon}" if mon != "1" else lsym
+                        else:
+                            s = mon if coeff == 1 else f"{coeff}*{mon}"
+                        terms.append(s)
+                    entry = " + ".join(terms) if terms else "0"
+                print(f'  d(a[{i + 1}]) = {entry}')
 
 
 # ============================================================
@@ -1887,8 +2262,8 @@ class Augmentation:
     Attributes
     ----------
     data    augmentation data:
-              Z/2 : List[int]      generators sent to 1 (others → 0)
-              Z/p : Dict[int,int]  generator → value in {0, ..., p−1}
+              Z/2 : List[int]           generators sent to 1 (others → 0)
+              Z/p : Dict[int|tuple,int] generator → value; also ('lambda', c) → unit value
     dga     the parent DGA
 
     Properties  (computed once, cached)
@@ -1904,6 +2279,14 @@ class Augmentation:
         self.grading_mod = grading_mod
 
     def __repr__(self) -> str:
+        if isinstance(self.data, dict):
+            gen_data = {k: v for k, v in self.data.items() if isinstance(k, int)}
+            lam_data = {k: v for k, v in self.data.items() if isinstance(k, tuple)}
+            parts = [f'ring={self.dga.ring!r}', f'grading_mod={self.grading_mod!r}',
+                     f'gens={gen_data!r}']
+            if lam_data:
+                parts.append(f'lambdas={lam_data!r}')
+            return f'Augmentation({", ".join(parts)})'
         return f'Augmentation({self.data!r}, ring={self.dga.ring!r}, grading_mod={self.grading_mod!r})'
 
     @cached_property
@@ -1930,7 +2313,21 @@ class Augmentation:
 
     @cached_property
     def cohomology_basis(self):
-        """Basis for linearized cohomology (Z/2 only)."""
+        """
+        Basis for linearized cohomology (Z/2 only).
+
+        Returns ``List[List[List[int]]]``:
+          - Outer list: one entry per grading space, ordered highest grade first
+            (same order as ``DGA._gens_spaces``).
+          - Middle list: basis vectors for the cohomology at that grade.
+          - Inner list: 1-indexed generator numbers where the F_2 basis vector
+            has a 1 (i.e., the support of the basis vector as a subset of
+            generators).
+
+        Example: ``[[4]], [[1, 3], [2]]]`` means the highest-grade cohomology
+        is 1-dimensional spanned by ``a_4``, and the next grade is 2-dimensional
+        spanned by ``a_1 + a_3`` and ``a_2``.
+        """
         if self.dga.ring != GroundRing.Z2:
             raise NotImplementedError(
                 'cohomology_basis is only implemented over Z/2'
@@ -1966,19 +2363,18 @@ class Augmentation:
                              for i in range(len(space))]
             else:
                 mat_k = self.dga._diff_matrix_f2(k, ld)
-                ker_vecs = null_space_f2(mat_k) if (mat_k and mat_k[0]) else (
-                    [[1 if i == j else 0 for j in range(len(space))]
-                     for i in range(len(space))])
-                ker_basis = ker_vecs if ker_vecs else (
-                    [[1 if i == j else 0 for j in range(len(space))]
-                     for i in range(len(space))])
+                if mat_k and mat_k[0]:
+                    ker_basis = null_space_f2(mat_k)  # may legitimately be []
+                else:
+                    ker_basis = [[1 if i == j else 0 for j in range(len(space))]
+                                 for i in range(len(space))]
             cohom = [[space[i] for i, v in enumerate(vec) if v] for vec in ker_basis]
             result.append([c for c in cohom if c])
         return result
 
     @cached_property
     def double_products(self):
-        """Cup-product multiplication table on linearized cohomology (Z/2 only)."""
+        """Cup-product multiplication table on linearized cohomology (Z/2 only). See [CEKSW11]."""
         if self.dga.ring != GroundRing.Z2:
             raise NotImplementedError(
                 'double_products is only implemented over Z/2'
@@ -2201,14 +2597,23 @@ ATLAS: Dict[str, List[List[int]]] = {
 # Section 7: Constructions
 # ============================================================
 
+def _cable_parts(leg: Leg):
+    """Shared braid ingredients for 2-cable constructions."""
+    p = leg.num_cusps
+    pp = [4 * i - 2 for i in range(1, p + 1)]
+    dc = [x for gen in leg.braid for x in (2*gen, 2*gen + 1, 2*gen - 1, 2*gen)]
+    return pp, dc
+
+
 def whitehead_double(leg: Leg) -> Leg:
     """
     Legendrian Whitehead double of leg.
     Returns a new Leg whose braid encodes the Whitehead double plat closure.
+    Requires leg to be a single-component knot.
     """
-    p = leg.num_cusps
-    pp = [4 * i - 2 for i in range(1, p + 1)]
-    dc = [x for gen in leg.braid for x in (2*gen, 2*gen + 1, 2*gen - 1, 2*gen)]
+    if leg.num_components != 1:
+        raise ValueError('whitehead_double requires a single-component knot')
+    pp, dc = _cable_parts(leg)
     return Leg([2] + pp + dc + pp, name=f'WhiteheadDouble({leg.name})')
 
 
@@ -2216,8 +2621,36 @@ def twisted_2cable(leg: Leg) -> Leg:
     """
     Legendrian twisted 2-cable of leg.
     Returns a new Leg whose braid encodes the twisted 2-cable plat closure.
+    Requires leg to be a single-component knot.
     """
-    p = leg.num_cusps
-    pp = [4 * i - 2 for i in range(1, p + 1)]
-    dc = [x for gen in leg.braid for x in (2*gen, 2*gen + 1, 2*gen - 1, 2*gen)]
+    if leg.num_components != 1:
+        raise ValueError('twisted_2cable requires a single-component knot')
+    pp, dc = _cable_parts(leg)
     return Leg(pp + [1] + dc + pp, name=f'Twisted2Cable({leg.name})')
+
+
+def two_copy(leg: Leg) -> Leg:
+    """
+    Legendrian 2-copy (push-off) of leg.
+    Returns a 2-component link consisting of leg and its Legendrian push-off,
+    with both components having the same Maslov potential (seed 0).
+    Requires leg to be a single-component knot.
+    The linking number between the two components equals tb(leg).
+    """
+    if leg.num_components != 1:
+        raise ValueError('two_copy requires a single-component knot')
+    pp, dc = _cable_parts(leg)
+    return Leg(pp + dc + pp, maslov=[0, 0], name=f'TwoCopy({leg.name})')
+
+
+def two_copy_shifted(leg: Leg) -> Leg:
+    """
+    Legendrian 2-copy of leg with shifted Maslov potential.
+    Same as two_copy but the first component has Maslov seed 1 and the second
+    has seed 0, shifting the grading of one copy by 1.
+    Requires leg to be a single-component knot.
+    """
+    if leg.num_components != 1:
+        raise ValueError('two_copy_shifted requires a single-component knot')
+    pp, dc = _cable_parts(leg)
+    return Leg(pp + dc + pp, maslov=[1, 0], name=f'TwoCopyShifted({leg.name})')

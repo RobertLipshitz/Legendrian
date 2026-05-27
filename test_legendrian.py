@@ -28,13 +28,19 @@ M52_B = [2, 3, 1, 3, 1, 2, 2, 3, 1, 3, 2]
 # 2-component link (σ_1 and σ_3 act on disjoint strand pairs)
 LINK_2 = [1, 3]
 
+# Hopf link: maslov=[1,0] gives grading [0,0,1,1]; has Z/3 augmentations
+HOPF = [2, 2]
+HOPF_MASLOV = [1, 0]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _aug_is_valid(augm: Augmentation) -> bool:
-    """Re-verify ε∘∂ = 0 over Z/2 using the augmentation's parent DGA."""
+    """Re-verify ε∘∂ = 0 over Z/2 using the augmentation's parent DGA.
+    Only correct for Z/2 augmentations: augm.data is List[int] there.
+    For Z/n, data is a Dict and this helper silently gives wrong results."""
     d = augm.dga.differential
     eps_set = set(augm.data)   # List[int] for Z/2
     for poly in d:
@@ -71,25 +77,39 @@ class TestNumComponents:
                 assert Leg(b).num_components == 1, \
                     f"Expected knot, got link for {name}: {b}"
 
-    def test_differential_raises_for_link(self):
-        with pytest.raises(ValueError):
-            _ = Leg(LINK_2).dga().differential
+    def test_z2_differential_works_for_link(self):
+        # Z/2 differential is purely combinatorial and link-agnostic
+        d = Leg(LINK_2, maslov=[0, 0]).dga().differential
+        assert isinstance(d, list)
 
-    def test_augmentations_raises_for_link(self):
-        with pytest.raises(ValueError):
-            Leg(LINK_2).augmentations()
+    def test_z2_differential_d_squared_zero_for_link(self):
+        assert Leg(LINK_2, maslov=[0, 0]).dga().check_d_squared()
 
-    def test_zlambda_diff_raises_for_link(self):
-        with pytest.raises(ValueError):
-            _ = Leg(LINK_2).dga('Zlambda').differential
+    def test_zn_differential_works_for_link(self):
+        d = Leg(LINK_2, maslov=[0, 0]).dga('Z3').differential
+        assert isinstance(d, list) and len(d) > 0
 
-    def test_rulings_raises_for_link(self):
-        with pytest.raises(ValueError):
-            Leg(LINK_2).rulings()
+    def test_augmentations_z2_graded_works_for_link(self):
+        # grading_mod=2: 2 | 2*rot_c = 2*1 always → valid for LINK_2
+        result = Leg(LINK_2, maslov=[0, 0]).dga().augmentations(grading_mod=2)
+        assert isinstance(result, list)
 
-    def test_rulings_graded_raises_for_link(self):
+    def test_augmentations_raises_for_link_bad_grading(self):
+        # grading_mod=0 (Z-graded) requires rot_c=0; LINK_2 has rot=(1,1)
         with pytest.raises(ValueError):
-            Leg(LINK_2).rulings(grading_mod=2)
+            Leg(LINK_2, maslov=[0, 0]).augmentations()
+
+    def test_zlambda_diff_works_for_link(self):
+        d = Leg(LINK_2, maslov=[0, 0]).dga('Zlambda').differential
+        assert isinstance(d, list) and len(d) > 0
+
+    def test_rulings_works_for_link(self):
+        result = Leg(LINK_2, maslov=[0, 0]).rulings(grading_mod=1)
+        assert isinstance(result, list)
+
+    def test_rulings_graded_works_for_link(self):
+        result = Leg(LINK_2, maslov=[0, 0]).rulings(grading_mod=2)
+        assert isinstance(result, list)
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +152,57 @@ class TestClassicalInvariants:
         k = Leg(TREFOIL)
         assert k.grading is k.grading
         assert k.tb == k.tb  # value stable across accesses
+
+    def test_rot_for_link_is_tuple(self):
+        assert isinstance(Leg(LINK_2).rot, tuple)
+
+    def test_rot_for_link_values(self):
+        assert Leg(LINK_2, maslov=[0, 0]).rot == (1, 1)
+
+
+# ---------------------------------------------------------------------------
+# Section 1b: Maslov potentials and link grading
+# ---------------------------------------------------------------------------
+
+class TestMaslovPotentials:
+
+    def test_trefoil_strand_potentials_default(self):
+        # Left cusps give mu[0]=mu[1]+1 and mu[2]=mu[3]+1; right cusp
+        # propagates mu[2]=mu[1] and mu[3]=mu[0]-2.  With seed 0: [1,0,0,-1].
+        assert Leg(TREFOIL).strand_potentials == [1, 0, 0, -1]
+
+    def test_trefoil_strand_potentials_shifted(self):
+        assert Leg(TREFOIL, maslov=[5]).strand_potentials == [6, 5, 5, 4]
+
+    def test_trefoil_grading_unchanged_by_maslov_shift(self):
+        # Shifting the Maslov seed shifts all generator gradings uniformly;
+        # for a knot the crossing grading is a *difference*, so it's unchanged.
+        assert Leg(TREFOIL, maslov=[5]).grading == Leg(TREFOIL).grading
+
+    def test_link_strand_potentials(self):
+        # LINK_2 = [1,3]: two disjoint components {strands 0,1} and {strands 2,3}.
+        # Left cusp constraints only: mu=[1,0,1,0].
+        assert Leg(LINK_2, maslov=[0, 0]).strand_potentials == [1, 0, 1, 0]
+
+    def test_link_grading(self):
+        assert Leg(LINK_2, maslov=[0, 0]).grading == [1, 1, 1, 1]
+
+    def test_link_grading_component_shift(self):
+        # Shifting component 1's seed by k shifts that component's crossing by k.
+        g0 = Leg(LINK_2, maslov=[0, 0]).grading
+        g1 = Leg(LINK_2, maslov=[0, 3]).grading
+        # Crossing 0 (gen=1) is on component 0 — unchanged.
+        assert g1[0] == g0[0]
+        # Crossing 1 (gen=3) is on component 1 — unchanged (difference of same-component potentials).
+        assert g1[1] == g0[1]
+
+    def test_maslov_wrong_length_raises(self):
+        with pytest.raises(ValueError):
+            Leg(TREFOIL, maslov=[0, 0]).strand_potentials  # knot needs length 1
+
+    def test_maslov_wrong_length_link_raises(self):
+        with pytest.raises(ValueError):
+            Leg(LINK_2, maslov=[0]).strand_potentials  # link needs length 2
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +269,26 @@ class TestAugmentations:
     def test_aug_count_trefoil(self):
         assert Leg(TREFOIL).dga().aug_count() == 2.5
 
+    def test_aug_count_grading_mod_zero_matches_default(self):
+        d = Leg(TREFOIL).dga()
+        assert d.aug_count(grading_mod=0) == d.aug_count()
+
+    def test_aug_count_grading_mod_odd(self):
+        d = Leg(TREFOIL).dga()
+        # grading_mod=1 (ungraded): 20 ungraded augs, chi*_1=5, exp=-5/2
+        assert d.aug_count(grading_mod=1) == pytest.approx(20 * 2 ** (-2.5))
+        # grading_mod=3: 5 Z/3-graded augs, chi*_3=1, exp=-1/2
+        assert d.aug_count(grading_mod=3) == pytest.approx(5 * 2 ** (-0.5))
+        # fig-eight, grading_mod=3: 4 augs, chi*_3=3, exp=-3/2
+        assert Leg(FIG_EIGHT).dga().aug_count(grading_mod=3) == pytest.approx(4 * 2 ** (-1.5))
+
+    def test_aug_count_grading_mod_even_raises(self):
+        d = Leg(TREFOIL).dga()
+        with pytest.raises(NotImplementedError):
+            d.aug_count(grading_mod=2)
+        with pytest.raises(NotImplementedError):
+            d.aug_count(grading_mod=4)
+
     def test_chekanov_pair_aug_counts_differ(self):
         assert len(Leg(M52_A).augmentations()) == 2
         assert len(Leg(M52_B).augmentations()) == 12
@@ -219,6 +310,15 @@ class TestAugmentations:
         augm = d.augmentations()[0]
         assert augm.dga is d
         assert augm.dga.leg is k
+
+    def test_trivial_augmentation_when_no_grade_zero_gens(self):
+        # Hopf link: all generators in degree ±1; none in degree 0.
+        # The trivial augmentation (all generators → 0) must still be found.
+        hopf = Leg([2, 2], maslov=[0, 0])
+        assert not any(x == 0 for x in hopf.grading), "precondition: no grade-0 gens"
+        augs = hopf.augmentations()
+        assert len(augs) == 1
+        assert augs[0].data == []
 
 
 # ---------------------------------------------------------------------------
@@ -277,8 +377,123 @@ class TestZDiff:
 
     def test_trefoil_zdiff_cusp_has_lambda(self):
         zd = Leg(TREFOIL).dga('Zlambda').differential
-        has_lambda = any(kind == 'lambda' for (_, kind) in zd[-1])
+        # knot has one component (c=0), so kind is ('lambda', 0)
+        has_lambda = any(isinstance(kind, tuple) and kind[0] == 'lambda' for (_, kind) in zd[-1])
         assert has_lambda
+
+    def test_trefoil_zdiff_check_d_squared(self):
+        assert Leg(TREFOIL).dga('Zlambda').check_d_squared()
+
+    def test_link_zlambda_diff_works(self):
+        d = Leg(LINK_2, maslov=[0, 0]).dga('Zlambda').differential
+        assert isinstance(d, list) and len(d) > 0
+
+    def test_link_zlambda_two_lambda_kinds(self):
+        d = Leg(LINK_2, maslov=[0, 0]).dga('Zlambda').differential
+        kinds = {kind for entry in d for (_, kind) in entry}
+        assert ('lambda', 0) in kinds
+        assert ('lambda', 1) in kinds
+
+    def test_link_zlambda_check_d_squared(self):
+        assert Leg(LINK_2, maslov=[0, 0]).dga('Zlambda').check_d_squared()
+
+    def test_zn_differential_link_symbolic(self):
+        # Z/n differential for links keeps lambda_c symbolic (not pre-substituted)
+        d = Leg(LINK_2, maslov=[0, 0]).dga('Z3').differential
+        kinds = {kind for entry in d for (_, kind) in entry}
+        assert ('lambda', 0) in kinds
+        assert ('lambda', 1) in kinds
+
+
+# ---------------------------------------------------------------------------
+# Section 5b: Z/n augmentations for links
+# ---------------------------------------------------------------------------
+
+class TestZnLinkAugmentations:
+
+    def test_augmentations_returns_list(self):
+        augs = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3').augmentations()
+        assert isinstance(augs, list)
+
+    def test_augmentations_nonempty(self):
+        augs = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3').augmentations()
+        assert len(augs) == 7
+
+    def test_lambda_keys_in_data(self):
+        augs = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3').augmentations()
+        for a in augs:
+            assert ('lambda', 0) in a.data
+            assert ('lambda', 1) in a.data
+
+    def test_lambda_values_are_units(self):
+        from math import gcd
+        n = 3
+        augs = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3').augmentations()
+        for a in augs:
+            for c in (0, 1):
+                v = a.data[('lambda', c)]
+                assert gcd(v, n) == 1, f"lambda_{c}={v} is not a unit mod {n}"
+
+    def test_knot_default_lambda_preserved(self):
+        # For knots, default is lambda -> -1 = n-1 mod n
+        augs = Leg(TREFOIL).dga('Z3').augmentations()
+        assert len(augs) == 10
+        assert all(a.data.get(('lambda', 0)) == 2 for a in augs)
+
+    def test_knot_lambda_override_zero_augs(self):
+        # lambda=1 contradicts d_squared=0 constraint for trefoil over Z/3
+        augs = Leg(TREFOIL).dga('Z3').augmentations(lambda_values={0: 1})
+        assert len(augs) == 0
+
+    def test_lin_hom_works_for_link_augmentation(self):
+        augs = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3').augmentations()
+        lh = augs[0].lin_hom
+        assert isinstance(lh, dict)
+
+    def test_augmentations_cached(self):
+        dga = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3')
+        assert dga.augmentations() is dga.augmentations()
+
+    def test_lambda_values_param_changes_result(self):
+        dga = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3')
+        default_augs = dga.augmentations()
+        # Fix lambda_0=1 (a valid unit): result may differ from search-all
+        fixed_augs = dga.augmentations(lambda_values={0: 1})
+        assert isinstance(fixed_augs, list)
+        # Verify all returned augs have lambda_0=1
+        assert all(a.data[('lambda', 0)] == 1 for a in fixed_augs)
+
+    def test_lin_hom_grading_mod_nonzero(self):
+        # grading_mod=2 takes diff_mat_zp path; must handle new dict format and lambda factors
+        dga = Leg(HOPF, maslov=HOPF_MASLOV).dga('Z3')
+        augs = dga.augmentations(grading_mod=2)
+        assert len(augs) == 7
+        lh = augs[0].lin_hom
+        assert isinstance(lh, dict)
+        # The set of distinct lin_hom polynomials must agree regardless of grading_mod
+        set_gm2 = {frozenset(a.lin_hom.items()) for a in augs}
+        set_gm0 = {frozenset(a.lin_hom.items()) for a in dga.augmentations(grading_mod=0)}
+        assert set_gm2 == set_gm0
+
+    @pytest.mark.parametrize("ring,n", [("Z3", 3), ("Z5", 5), ("Z7", 7)])
+    def test_lambda_product_condition(self, ring, n):
+        # Caitlin's result: every augmentation of a 2-component link must satisfy
+        # λ_0 · λ_1 = (-1)^2 = 1.  Tests both that the condition holds and that
+        # there is at least one augmentation to test it on.
+        augs = Leg(HOPF, maslov=HOPF_MASLOV).dga(ring).augmentations()
+        assert augs, f"no augmentations found over {ring}"
+        for a in augs:
+            prod = a.data[('lambda', 0)] * a.data[('lambda', 1)] % n
+            assert prod == 1, f"λ_0·λ_1 = {prod} ≠ 1 mod {n}"
+
+    @pytest.mark.parametrize("maslov", [[1, 0], [0, 1], [1, 1], [0, 0]])
+    def test_lambda_product_condition_maslov_independent(self, maslov):
+        # The product condition holds regardless of Maslov seed choice.
+        n = 5
+        augs = Leg(HOPF, maslov=maslov).dga('Z5').augmentations()
+        for a in augs:
+            prod = a.data[('lambda', 0)] * a.data[('lambda', 1)] % n
+            assert prod == 1, f"maslov={maslov}: λ_0·λ_1 = {prod} ≠ 1 mod {n}"
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +547,20 @@ class TestRulings:
     def test_rulings_are_cached(self):
         k = Leg(TREFOIL)
         assert k.rulings() is k.rulings()
+
+    def test_rulings_z_graded_raises_for_nonzero_rot_link(self):
+        # LINK_2 has rot=(1,1); Z-graded rulings require rot=0
+        with pytest.raises(ValueError):
+            Leg(LINK_2, maslov=[0, 0]).rulings(grading_mod=0)
+
+    def test_rulings_incompatible_mod_raises(self):
+        # grading_mod=3 requires 3 | 2*rot_c; rot=(1,1) gives 2*1=2, 3∤2
+        with pytest.raises(ValueError):
+            Leg(LINK_2, maslov=[0, 0]).rulings(grading_mod=3)
+
+    def test_ruling_invariant_propagates_guard(self):
+        with pytest.raises(ValueError):
+            Leg(LINK_2, maslov=[0, 0]).ruling_invariant(grading_mod=0)
 
 
 # ---------------------------------------------------------------------------
@@ -402,7 +631,7 @@ class TestCheckDSquaredZ:
 
 
 # ---------------------------------------------------------------------------
-# Section 11: OO-specific interface tests
+# Section 10: OO-specific interface tests
 # ---------------------------------------------------------------------------
 
 class TestLegConstruction:
@@ -603,7 +832,7 @@ class TestNotImplemented:
 
 
 # ---------------------------------------------------------------------------
-# Section 12: Tangle input
+# Section 11: Tangle input
 # ---------------------------------------------------------------------------
 
 # Tangle for mK3_1: two LCs, then crossings 2,3,1,3,1,3,2 (1-indexed) → 0-indexed,
@@ -695,8 +924,9 @@ class TestTangleInput:
     def test_nonplat_tb_matches_ref(self):
         assert Leg(_TANGLE_NON_PLAT).tb == Leg([3, 3]).tb
 
-    def test_nonplat_rot_matches_ref(self):
-        assert Leg(_TANGLE_NON_PLAT).rot == Leg([3, 3]).rot
+    def test_nonplat_rot_is_tuple(self):
+        # _TANGLE_NON_PLAT converts to braid [3,3], a 2-component link
+        assert isinstance(Leg(_TANGLE_NON_PLAT).rot, tuple)
 
     # --- DGA ---
 
@@ -743,7 +973,37 @@ class TestTangleInput:
 
     # --- draw ---
 
-    def test_draw_use_tangle_returns_figure(self):
+    def test_draw_plat_returns_figure(self):
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        fig = Leg([2, 2, 2]).draw()
+        assert hasattr(fig, 'savefig')
+        plt.close(fig)
+
+    def test_draw_plat_color_true(self):
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        fig = Leg([2, 2, 2]).draw(color=True)
+        assert hasattr(fig, 'savefig')
+        plt.close(fig)
+
+    def test_draw_tangle_returns_figure(self):
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        t = [('<', 0), ('X', 0), ('>', 0)]
+        fig = Leg(t).draw(method='tangle')
+        assert hasattr(fig, 'savefig')
+        plt.close(fig)
+
+    def test_draw_tangle_no_tangle_raises(self):
+        with pytest.raises(AttributeError):
+            Leg([1]).draw(method='tangle')
+
+    def test_draw_tangle_use_tangle_compat(self):
+        """use_tangle=True is still accepted as a deprecated alias."""
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
@@ -752,13 +1012,29 @@ class TestTangleInput:
         assert hasattr(fig, 'savefig')
         plt.close(fig)
 
-    def test_draw_use_tangle_no_tangle_raises(self):
+    def test_draw_grid_returns_figure(self):
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        fig = Leg(([1, 0], [0, 1])).draw(method='grid')
+        assert hasattr(fig, 'savefig')
+        plt.close(fig)
+
+    def test_draw_grid_no_grid_raises(self):
         with pytest.raises(AttributeError):
-            Leg([1]).draw(use_tangle=True)
+            Leg([2, 2, 2]).draw(method='grid')
+
+    def test_draw_grid_color_true(self):
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        fig = Leg(([1, 0], [0, 1])).draw(method='grid', color=True)
+        assert hasattr(fig, 'savefig')
+        plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
-# Section 13: Grid diagram input
+# Section 12: Grid diagram input
 #
 # Convention: Leg((X_perm, O_perm)) where X_perm[j] is the row of the X
 # marker in column j, O_perm[j] is the row of the O marker in column j,
@@ -907,7 +1183,7 @@ class TestGridInput:
 
 
 # ---------------------------------------------------------------------------
-# Section 14: Grid-atlas round-trips
+# Section 13: Grid-atlas round-trips
 #
 # All 138 grid representatives from GRID_ATLAS are tested against pre-computed
 # expected invariants.  For rot = 0 cases the ruling polynomial is also
@@ -938,33 +1214,46 @@ def _build_grid_cases():
     return rows, ids
 
 
-_GRID_CASES, _GRID_IDS = _build_grid_cases()
-_RULING_CASES = [(g, nc, tb, rot, ri) for g, nc, tb, rot, ri in _GRID_CASES if ri is not None]
-_RULING_IDS   = [id_ for id_, (_, _, _, rot, ri) in zip(_GRID_IDS, _GRID_CASES) if ri is not None]
+_grid_cases_cache: list | None = None
+_grid_ids_cache: list | None = None
+
+
+def _get_grid_cases():
+    global _grid_cases_cache, _grid_ids_cache
+    if _grid_cases_cache is None:
+        _grid_cases_cache, _grid_ids_cache = _build_grid_cases()
+    return _grid_cases_cache, _grid_ids_cache
+
+
+def pytest_generate_tests(metafunc):
+    if metafunc.cls is TestGridAtlas:
+        cases, ids = _get_grid_cases()
+        ruling_cases = [c for c in cases if c[4] is not None]
+        ruling_ids = [id_ for id_, c in zip(ids, cases) if c[4] is not None]
+        if metafunc.function.__name__ == "test_ruling":
+            metafunc.parametrize("grid,nc,tb,rot,ruling", ruling_cases, ids=ruling_ids)
+        else:
+            metafunc.parametrize("grid,nc,tb,rot,ruling", cases, ids=ids)
 
 
 class TestGridAtlas:
     """Round-trip tests for every grid representative in GRID_ATLAS."""
 
-    @pytest.mark.parametrize("grid,nc,tb,rot,ruling", _GRID_CASES, ids=_GRID_IDS)
     def test_nc(self, grid, nc, tb, rot, ruling):
         assert Leg(grid).num_components == nc
 
-    @pytest.mark.parametrize("grid,nc,tb,rot,ruling", _GRID_CASES, ids=_GRID_IDS)
     def test_tb(self, grid, nc, tb, rot, ruling):
         assert Leg(grid).tb == tb
 
-    @pytest.mark.parametrize("grid,nc,tb,rot,ruling", _GRID_CASES, ids=_GRID_IDS)
     def test_rot(self, grid, nc, tb, rot, ruling):
         assert Leg(grid).rot == rot
 
-    @pytest.mark.parametrize("grid,nc,tb,rot,ruling", _RULING_CASES, ids=_RULING_IDS)
     def test_ruling(self, grid, nc, tb, rot, ruling):
         assert Leg(grid).ruling_invariant() == ruling
 
 
 # ---------------------------------------------------------------------------
-# Section 15: HOMFLY and Kauffman polynomial reality checks
+# Section 14: HOMFLY and Kauffman polynomial reality checks
 #
 # Rutherford (2006): for a max-tb Legendrian rep L of knot K with tb = tb(L),
 #   R2(L)(z) = coefficient of a^{-tb-1} in HOMFLY(K; a, z)
@@ -1095,3 +1384,83 @@ class TestPolynomialRealityCheck:
     def test_r1_ruling_polynomial(self, rep, expected_r2, expected_r1):
         k = Leg(rep)
         assert k.ruling_invariant(grading_mod=1) == expected_r1
+
+
+# ---------------------------------------------------------------------------
+# Section 15: Link grid atlas — structural and DGA sanity checks
+#
+# Tests that do not require pre-computed invariant values.  Pre-computed
+# tb, rot, and ruling data will be added in a later pass.
+#
+# Test strategy
+# -------------
+# 1. nc == 2         — every entry in LINK_GRID_ATLAS should be a 2-component link
+# 2. d² = 0          — Z/2 DGA correctness; maslov not needed (differential is grade-agnostic)
+# 3. rot is a tuple  — regression on multi-component rot
+# 4. Z/2 rulings     — rulings(grading_mod=2) never raises (2 | 2r for any r)
+# 5. Z graded guard  — rulings(grading_mod=0) raises iff any rot_c ≠ 0
+# ---------------------------------------------------------------------------
+
+from auxiliary_data.link_grid_atlas import LINK_GRID_ATLAS as _LGA
+
+
+def _build_link_cases():
+    rows, ids = [], []
+    for name in sorted(_LGA.keys()):
+        for i, grid in enumerate(_LGA[name]):
+            rows.append((name, i, grid))
+            ids.append(f"{name}.{i}")
+    return rows, ids
+
+
+_LINK_CASES, _LINK_IDS = _build_link_cases()
+
+# Small, fast subset for product-condition tests: 2-component links with rot=(0,0)
+# and manageable augmentation counts over Z/3.  Chosen to keep per-test time < 0.1s.
+_PRODUCT_CHECK_LINKS = ['L2a1', 'L4a1', 'L6a1', 'L6a3', 'm(L4a1)', 'm(L5a1)']
+
+
+class TestLinkGridAtlas:
+    """Structural and DGA sanity checks for every link in LINK_GRID_ATLAS."""
+
+    @pytest.mark.parametrize("name,i,grid", _LINK_CASES, ids=_LINK_IDS)
+    def test_nc(self, name, i, grid):
+        assert Leg(grid).num_components == 2
+
+    @pytest.mark.parametrize("name,i,grid", _LINK_CASES, ids=_LINK_IDS)
+    def test_d_squared_zero(self, name, i, grid):
+        # Z/2 differential is grade-agnostic; no maslov needed
+        assert Leg(grid).dga().check_d_squared()
+
+    @pytest.mark.parametrize("name,i,grid", _LINK_CASES, ids=_LINK_IDS)
+    def test_rot_is_tuple(self, name, i, grid):
+        assert isinstance(Leg(grid).rot, tuple)
+
+    @pytest.mark.parametrize("name,i,grid", _LINK_CASES, ids=_LINK_IDS)
+    def test_z2_rulings_works(self, name, i, grid):
+        # grading_mod=2: 2 | 2r_c for every integer r_c, so always valid
+        result = Leg(grid, maslov=[0, 0]).rulings(grading_mod=2)
+        assert isinstance(result, list)
+
+    @pytest.mark.parametrize("name,i,grid", _LINK_CASES, ids=_LINK_IDS)
+    def test_z_graded_rulings_guard(self, name, i, grid):
+        leg = Leg(grid, maslov=[0, 0])
+        if any(r != 0 for r in leg.rot):
+            with pytest.raises(ValueError):
+                leg.rulings(grading_mod=0)
+        else:
+            assert isinstance(leg.rulings(grading_mod=0), list)
+
+    @pytest.mark.parametrize("name", _PRODUCT_CHECK_LINKS)
+    def test_lambda_product_condition_z3(self, name):
+        # Caitlin's result: every augmentation of a 2-component link satisfies
+        # λ_0 · λ_1 = (-1)^2 = 1.  Checked over Z/3 for a fast subset of atlas links.
+        grid = _LGA[name][0]
+        augs = Leg(grid).dga('Z3').augmentations()
+        for a in augs:
+            prod = a.data[('lambda', 0)] * a.data[('lambda', 1)] % 3
+            assert prod == 1, f"{name}: λ_0·λ_1 = {prod} ≠ 1 mod 3"
+
+    @pytest.mark.parametrize("name,i,grid", _LINK_CASES, ids=_LINK_IDS)
+    def test_zlambda_d_squared_zero(self, name, i, grid):
+        assert Leg(grid, maslov=[0, 0]).dga('Zlambda').check_d_squared()

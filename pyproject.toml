@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "legendrian"
-version = "0.2.1"
+version = "0.3.0"
 description = "Legendrian knot and link invariants with an OO interface"
 requires-python = ">=3.10"
 dependencies = [
